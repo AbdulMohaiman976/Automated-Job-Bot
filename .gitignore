@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+frontend-new/node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build outputs
+dist/
+build/
+frontend/dist/
+frontend-new/dist/
+
+# Runtime / generated data
+data/
+storage/
+scratch/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

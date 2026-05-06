@@ -1,0 +1,20 @@
+{
+  "name": "job-bot",
+  "version": "0.1.0",
+  "description": "Daily Data Engineering job discovery and application preparation workflow.",
+  "type": "module",
+  "scripts": {
+    "discover": "python src/workflow/discover.py",
+    "discover:py": "python src/workflow/discover.py",
+    "discover:js": "node src/workflow/discover.js",
+    "api": "python src/api.py",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "dependencies": {
+    "apify-client": "latest",
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0-rc.12",
+    "date-fns": "^2.30.0",
+    "dotenv": "^16.3.1"
+  }
+}

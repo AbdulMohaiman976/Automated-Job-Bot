@@ -1,0 +1,23 @@
+{
+  "name": "data-engineering-job-scraper",
+  "title": "Data Engineering Job Scraper",
+  "description": "Scrapes remote Data Engineering jobs from Indeed and ZipRecruiter",
+  "version": "0.1.0",
+  "buildTag": "latest",
+  "env": {
+    "APIFY_COMMIT_SHA": null,
+    "APIFY_IS_AT_HOME": true
+  },
+  "dockerfile": null,
+  "gitRepo": null,
+  "exampleRunInput": {
+    "searchTerm": "Data Engineering",
+    "locationFilter": "United States",
+    "source": "indeed",
+    "maxPages": 1
+  },
+  "categories": [
+    "REAL_ESTATE",
+    "JOB_LISTINGS"
+  ]
+}

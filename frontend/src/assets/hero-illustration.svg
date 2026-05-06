@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" role="img" aria-labelledby="title desc">
+  <title id="title">Job workflow illustration</title>
+  <desc id="desc">A soft sky-blue dashboard illustration with layered cards and analytics shapes.</desc>
+  <defs>
+    <linearGradient id="sky" x1="112" y1="44" x2="648" y2="372" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#dbefff"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="160" y1="92" x2="604" y2="332" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f0f9ff"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="224" y1="116" x2="520" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="760" height="420" rx="36" fill="url(#sky)"/>
+  <circle cx="112" cy="92" r="18" fill="#bae6fd"/>
+  <circle cx="648" cy="84" r="12" fill="#7dd3fc"/>
+  <circle cx="628" cy="324" r="20" fill="#bae6fd"/>
+  <rect x="110" y="78" width="540" height="264" rx="30" fill="rgba(255,255,255,0.35)"/>
+  <rect x="140" y="100" width="480" height="208" rx="24" fill="url(#panel)" stroke="rgba(14,165,233,0.16)" stroke-width="2"/>
+  <rect x="170" y="126" width="170" height="16" rx="8" fill="#cbeafe"/>
+  <rect x="170" y="156" width="280" height="14" rx="7" fill="#e0f2fe"/>
+  <rect x="170" y="182" width="220" height="14" rx="7" fill="#e0f2fe"/>
+  <rect x="170" y="214" width="258" height="58" rx="18" fill="#f8fbff" stroke="rgba(14,165,233,0.1)" stroke-width="2"/>
+  <rect x="186" y="230" width="70" height="12" rx="6" fill="#0ea5e9" opacity="0.25"/>
+  <rect x="186" y="250" width="164" height="10" rx="5" fill="#dbeafe"/>
+  <rect x="496" y="132" width="96" height="126" rx="20" fill="#eff6ff" stroke="rgba(14,165,233,0.14)" stroke-width="2"/>
+  <rect x="516" y="154" width="56" height="56" rx="16" fill="url(#accent)"/>
+  <path d="M531 183l9 9 18-22" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="7"/>
+  <rect x="182" y="286" width="384" height="18" rx="9" fill="#dbeafe"/>
+  <rect x="182" y="286" width="220" height="18" rx="9" fill="url(#accent)"/>
+  <path d="M222 350c38-34 90-52 146-52 73 0 135 26 182 78" fill="none" stroke="#7dd3fc" stroke-linecap="round" stroke-width="18" opacity="0.45"/>
+  <path d="M194 336c44-32 96-48 156-48 76 0 141 24 194 72" fill="none" stroke="#0ea5e9" stroke-linecap="round" stroke-width="8" opacity="0.26"/>
+  <circle cx="214" cy="322" r="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="4"/>
+  <circle cx="380" cy="304" r="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="4"/>
+  <circle cx="554" cy="354" r="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="4"/>
+</svg>
