@@ -5,7 +5,7 @@ from glob import glob
 from contextlib import redirect_stdout, redirect_stderr
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Dict, Any
 from datetime import datetime
 import shutil
 
@@ -15,7 +15,7 @@ sys.path.append(BASE_DIR)
 
 from src.workflow.discover import run_discovery
 from src.utils.cv_processor import process_cv
-from src.workflow.optimize import tailor_cv, generate_cover_letter
+from src.workflow.optimize import tailor_cv, generate_cover_letter, render_tailored_cv_latex
 from src.workflow.apply import signal_review_complete
 from src.storage.tracker import (
     get_tracker_summary, 
@@ -89,6 +89,32 @@ def get_latest_jobs_file(mode="unique"):
     files.sort(reverse=True)
     return files[0]
 
+
+def _load_jobs_from_file(path: str) -> List[Dict[str, Any]]:
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _build_job_index() -> Dict[str, Dict[str, Any]]:
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for mode in ("all", "unique"):
+        latest_file = get_latest_jobs_file(mode)
+        for job in _load_jobs_from_file(latest_file):
+            jid = str(job.get("id") or job.get("job_id") or "").strip()
+            if jid and jid not in indexed:
+                indexed[jid] = job
+    return indexed
+
+
+def _load_tailored_payload(job_id: str) -> Dict[str, Any]:
+    filename = os.path.join(APPLICATIONS_DIR, job_id, "tailored_cv.json")
+    if not os.path.exists(filename):
+        return {}
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 @app.get("/jobs")
 async def get_jobs(mode: str = "unique"):
     latest_file = get_latest_jobs_file(mode)
@@ -108,6 +134,47 @@ async def get_jobs(mode: str = "unique"):
             job["status"] = status_map.get(jid, JobStatus.DISCOVERED)
             
         return jobs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/jobs/applied")
+async def get_applied_jobs():
+    try:
+        tracker = get_tracker_summary()
+        applications = tracker.get("applications", [])
+        job_index = _build_job_index()
+
+        applied_jobs = []
+        for app_entry in applications:
+            if app_entry.get("status") != JobStatus.SUBMITTED:
+                continue
+
+            job_id = str(app_entry.get("job_id") or "").strip()
+            if not job_id:
+                continue
+
+            job_details = job_index.get(job_id, {})
+            tailored = _load_tailored_payload(job_id)
+            applied_jobs.append(
+                {
+                    "job_id": job_id,
+                    "job_title": app_entry.get("job_title") or job_details.get("job_title", ""),
+                    "company": app_entry.get("company") or job_details.get("company", ""),
+                    "status": app_entry.get("status", JobStatus.SUBMITTED),
+                    "submitted_at": app_entry.get("updated_at"),
+                    "job_url": job_details.get("url") or job_details.get("job_url", ""),
+                    "source": job_details.get("source", ""),
+                    "location": job_details.get("location", ""),
+                    "posted_date": job_details.get("posted_date", ""),
+                    "tailored_cv": tailored.get("cv"),
+                    "tailored_cv_latex": tailored.get("cv_latex", ""),
+                    "cover_letter": tailored.get("cover_letter"),
+                }
+            )
+
+        applied_jobs.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
+        return applied_jobs
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -196,14 +263,49 @@ async def upload_cv(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/cv/clear")
+async def clear_cv():
+    # Remove parsed profile
+    profile_path = os.path.join(PROFILES_DIR, "parsed_profile.json")
+    if os.path.exists(profile_path):
+        try:
+            os.remove(profile_path)
+        except Exception:
+            pass
+            
+    # Clear uploads directory
+    try:
+        for f in glob(os.path.join(UPLOADS_DIR, "*")):
+            os.remove(f)
+    except Exception:
+        pass
+        
+    return {"message": "CV cleared"}
+
 @app.get("/cv/file")
 async def get_cv_file():
     files = glob(os.path.join(UPLOADS_DIR, "*"))
     if not files:
         raise HTTPException(status_code=404, detail="No CV uploaded")
     files.sort(key=os.path.getmtime, reverse=True)
+    latest = files[0]
+    ext = os.path.splitext(latest)[1].lower()
+    media_type_map = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".doc": "application/msword",
+    }
     from fastapi.responses import FileResponse
-    return FileResponse(files[0])
+    return FileResponse(
+        latest,
+        media_type=media_type_map.get(ext, "application/octet-stream"),
+        content_disposition_type="inline",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 @app.get("/cv/profile")
 async def get_cv_profile():
@@ -215,23 +317,19 @@ async def get_cv_profile():
 
 @app.get("/jobs/tailored/{job_id}")
 async def get_tailored_details(job_id: str):
-    job_dir = os.path.join(APPLICATIONS_DIR, job_id)
-    filename = os.path.join(job_dir, "tailored_cv.json")
-    if not os.path.exists(filename):
+    tailored_payload = _load_tailored_payload(job_id)
+    if not tailored_payload:
         raise HTTPException(status_code=404, detail="No tailoring found for this job")
-    with open(filename, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return tailored_payload
 
 @app.post("/jobs/tailor/{job_id}")
 async def tailor_job(job_id: str):
-    # Find job in latest file
-    latest_file = get_latest_jobs_file()
-    if not latest_file:
+    latest_unique_file = get_latest_jobs_file("unique")
+    latest_all_file = get_latest_jobs_file("all")
+    if not latest_unique_file and not latest_all_file:
         raise HTTPException(status_code=404, detail="No jobs discovered yet")
-        
-    with open(latest_file, "r", encoding="utf-8") as f:
-        jobs = json.load(f)
-        
+
+    jobs = _load_jobs_from_file(latest_unique_file) + _load_jobs_from_file(latest_all_file)
     job = next((j for j in jobs if str(j.get('id') or j.get('job_id')) == job_id), None)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -244,8 +342,10 @@ async def tailor_job(job_id: str):
     try:
         t_cv = tailor_cv(profile, job.get('description', ''))
         t_cl = generate_cover_letter(profile, job.get('description', ''))
-        save_tailored_application(job_id, {"cv": t_cv, "cover_letter": t_cl})
-        return {"message": "Job tailored successfully", "job_id": job_id}
+        t_latex = render_tailored_cv_latex(t_cv)
+        payload = {"cv": t_cv, "cv_latex": t_latex, "cover_letter": t_cl}
+        save_tailored_application(job_id, payload)
+        return {"message": "Job tailored successfully", "job_id": job_id, "tailored": payload}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -284,6 +384,7 @@ async def run_apply_task(selected_jobs, profile):
             for i, job in enumerate(selected_jobs):
                 application_status["current_idx"] = i + 1
                 application_status["current_job"] = {
+                    "id": str(job.get('id') or job.get('job_id') or ""),
                     "title": job.get('job_title'),
                     "company": job.get('company')
                 }
@@ -297,33 +398,50 @@ async def run_apply_task(selected_jobs, profile):
         application_status["current_job"] = None
 
 async def start_applications_impl(job_ids: List[str], background_tasks: BackgroundTasks):
+    print(f"DEBUG: start_applications_impl called with job_ids: {job_ids}")
     if application_status["running"]:
+        print("DEBUG: applications already in progress")
         return {"message": "Applications are already in progress"}
 
-    latest_file = get_latest_jobs_file()
-    if not latest_file:
+    latest_unique_file = get_latest_jobs_file("unique")
+    latest_all_file = get_latest_jobs_file("all")
+    print(f"DEBUG: latest unique: {latest_unique_file}, latest all: {latest_all_file}")
+    if not latest_unique_file and not latest_all_file:
         raise HTTPException(status_code=404, detail="No jobs found")
+        
+    jobs = _load_jobs_from_file(latest_unique_file) + _load_jobs_from_file(latest_all_file)
+    job_map = {}
+    for j in jobs:
+        jid = str(j.get('id') or j.get('job_id') or "")
+        if jid and jid not in job_map:
+            job_map[jid] = j
 
-    with open(latest_file, "r", encoding="utf-8") as f:
-        jobs = json.load(f)
-
-    selected_jobs = [j for j in jobs if (str(j.get('id') or j.get('job_id')) in job_ids)]
+    selected_jobs = [job_map[jid] for jid in job_ids if jid in job_map]
+    print(f"DEBUG: matched selected_jobs count: {len(selected_jobs)}")
 
     if not selected_jobs:
+        print("DEBUG: raising 404 No valid jobs selected")
         raise HTTPException(status_code=404, detail="No valid jobs selected")
 
     profile = await get_cv_profile()
+    print(f"DEBUG: profile loaded: {bool(profile)}")
     if not profile:
+        print("DEBUG: raising 400 CV not processed yet")
         raise HTTPException(status_code=400, detail="CV not processed yet")
 
     background_tasks.add_task(run_apply_task, selected_jobs, profile)
+    print("DEBUG: background task added successfully")
     return {"message": f"Sequential application for {len(selected_jobs)} jobs started."}
 
 
 @app.post("/apply/start")
 @app.post("/apply/bulk")
 async def start_applications(job_ids: List[str], background_tasks: BackgroundTasks):
-    return await start_applications_impl(job_ids, background_tasks)
+    try:
+        return await start_applications_impl(job_ids, background_tasks)
+    except Exception as e:
+        print(f"DEBUG Exception in start_applications: {e}")
+        raise
 
 
 if __name__ == "__main__":

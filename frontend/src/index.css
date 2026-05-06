@@ -576,7 +576,7 @@ body {
   display: grid;
   grid-template-columns: 1.5fr 1fr;
   gap: 1.5rem;
-  max-height: 500px;
+  max-height: none;
 }
 
 .preview-pane {
@@ -586,7 +586,7 @@ body {
   background: rgba(0,0,0,0.2);
   border-radius: 0.75rem;
   padding: 1rem;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .pane-header {
@@ -599,12 +599,13 @@ body {
 }
 
 .ats-cv-content, .cover-letter-content {
-  overflow-y: auto;
+  overflow: visible;
   font-family: 'Courier New', Courier, monospace;
   font-size: 0.85rem;
   line-height: 1.4;
   color: #ccc;
   padding-right: 0.5rem;
+  max-height: none;
 }
 
 .ats-cv-content h5 { color: white; font-size: 1.1rem; margin-bottom: 1rem; }
@@ -614,9 +615,36 @@ body {
 .cover-letter-content pre {
   white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .cursor-pointer { cursor: pointer; }
+
+.applied-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.applied-job-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 1.1rem;
+  padding: 1rem;
+  box-shadow: var(--shadow-soft);
+}
+
+.applied-job-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.applied-job-details {
+  margin-top: 1rem;
+}
 
 :root {
   --bg-color: #f7fbff;
@@ -1173,6 +1201,149 @@ body {
   color: var(--text-main);
 }
 
+/* Tailored Resume Display */
+.tailored-resume {
+  padding: 0.25rem 0;
+}
+
+.resume-header-block {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.resume-name {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text-main);
+  margin-bottom: 0.35rem;
+}
+
+.resume-contact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.resume-contact-row span,
+.resume-contact-row a {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.resume-link {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.resume-link:hover {
+  text-decoration: underline;
+}
+
+.resume-section-block {
+  margin-bottom: 1.25rem;
+}
+
+.resume-section-block h4 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary-strong);
+  margin-bottom: 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.resume-section-block p {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text-main);
+}
+
+.resume-entry {
+  margin-bottom: 0.85rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid rgba(14, 165, 233, 0.2);
+}
+
+.entry-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.entry-top-row strong {
+  font-size: 0.95rem;
+  color: var(--text-main);
+}
+
+.entry-duration {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.entry-org {
+  font-size: 0.85rem;
+  color: var(--primary-strong);
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.entry-bullets {
+  margin: 0.35rem 0 0 1rem;
+  padding: 0;
+  list-style: disc;
+}
+
+.entry-bullets li {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-main);
+  margin-bottom: 0.15rem;
+}
+
+/* Cover letter formatted */
+.cover-letter-formatted {
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--text-main);
+}
+
+.cover-letter-formatted p {
+  margin-bottom: 0.25rem;
+}
+
+/* Generate & Apply buttons */
+.generate-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 1rem !important;
+  font-size: 1.05rem !important;
+}
+
+.apply-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 1rem !important;
+  font-size: 1.1rem !important;
+  box-shadow: 0 8px 24px rgba(5, 150, 105, 0.25);
+}
+
+.apply-btn:hover {
+  box-shadow: 0 12px 32px rgba(5, 150, 105, 0.35);
+}
+
 .logo-icon img {
   width: 42px;
   height: 42px;
@@ -1227,5 +1398,9 @@ body {
     width: 100%;
     justify-content: center;
     text-align: center;
+  }
+
+  .applied-job-top {
+    flex-direction: column;
   }
 }

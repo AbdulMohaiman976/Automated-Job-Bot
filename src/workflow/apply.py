@@ -4,6 +4,7 @@ import os
 from playwright.async_api import async_playwright
 from src.config import USER_AGENT
 from src.storage.tracker import log_application, save_tailored_application, JobStatus
+from src.workflow.optimize import render_tailored_cv_latex
 
 # Global events for human-in-the-loop review
 review_event = asyncio.Event()
@@ -102,6 +103,7 @@ class SequentialApplier:
             
             save_tailored_application(job_id, {
                 "cv": tailored_cv,
+                "cv_latex": render_tailored_cv_latex(tailored_cv),
                 "cover_letter": cover_letter
             })
             log_application(job_id, job_title, company, JobStatus.TAILORED)
