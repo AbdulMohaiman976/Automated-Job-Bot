@@ -61,7 +61,20 @@ def run_discovery():
             for future in as_completed(future_map):
                 source = future_map[future]
                 try:
-                    source_jobs[source] = future.result() or []
+                    jobs = future.result() or []
+                    source_jobs[source] = jobs
+                    
+                    # Live Update: Save jobs from this source immediately so they show up in UI
+                    if jobs:
+                        try:
+                            log(f"Live Update: Saving {len(jobs)} jobs from {source}...")
+                            save_jobs(jobs, suffix="all")
+                            
+                            # Also save to unique so the dashboard 'Apply' tab shows them immediately
+                            deduped_partial = deduplicate_jobs(jobs)
+                            save_jobs(deduped_partial, suffix="unique")
+                        except Exception as e:
+                            log(f"Live Update Warning: {e}")
                 except Exception as exc:
                     message = f"{source} discovery failed: {exc}"
                     errors.append(message)

@@ -40,21 +40,31 @@ DISCOVERY_LOG_FILE = os.path.join(BASE_DIR, "scratch", "discover.log")
 class _TeeWriter:
     def __init__(self, *streams):
         self.streams = streams
-
     def write(self, data):
         for stream in self.streams:
             stream.write(data)
-            stream.flush()
-
     def flush(self):
         for stream in self.streams:
-            stream.flush()
+            if hasattr(stream, 'flush'):
+                stream.flush()
 
+class _LogCallbackStream:
+    def __init__(self, callback):
+        self.callback = callback
+    def write(self, data):
+        if data.strip():
+            self.callback(data)
+    def flush(self):
+        pass
 
 def _append_discovery_log(message: str):
     os.makedirs(os.path.dirname(DISCOVERY_LOG_FILE), exist_ok=True)
-    with open(DISCOVERY_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(message.rstrip("\n") + "\n")
+    # Open with 'a' and close immediately to avoid locking
+    try:
+        with open(DISCOVERY_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(message.rstrip("\n") + "\n")
+    except Exception:
+        pass # Ignore transient lock errors during write
 
 
 def _reset_discovery_log():
@@ -209,11 +219,12 @@ def run_discovery_task():
     discovery_status["last_message"] = "Starting discovery"
     _reset_discovery_log()
     try:
-        with open(DISCOVERY_LOG_FILE, "a", encoding="utf-8") as log_file:
-            tee = _TeeWriter(sys.stdout, log_file)
-            with redirect_stdout(tee), redirect_stderr(tee):
-                print(f"[{datetime.now().isoformat()}] Discovery task started")
-                run_discovery()
+        # Use a callback stream to avoid keeping the file open
+        log_stream = _LogCallbackStream(_append_discovery_log)
+        tee = _TeeWriter(sys.stdout, log_stream)
+        with redirect_stdout(tee), redirect_stderr(tee):
+            print(f"[{datetime.now().isoformat()}] Discovery task started")
+            run_discovery()
         discovery_status["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         discovery_status["last_message"] = "Discovery complete"
     except Exception as e:
@@ -225,9 +236,14 @@ def run_discovery_task():
 
 @app.post("/discover")
 async def start_discovery(background_tasks: BackgroundTasks):
-    if discovery_status["running"]:
+    # Check if already running to avoid double-starting
+    if discovery_status.get("running"):
         return {"message": "Discovery is already in progress"}
 
+    # Set status to TRUE immediately before starting background task
+    discovery_status["running"] = True
+    discovery_status["last_message"] = "Starting discovery pipeline..."
+    
     background_tasks.add_task(run_discovery_task)
     return {"message": "Discovery started in background"}
 
@@ -369,7 +385,7 @@ async def get_apply_tracker():
     return get_tracker_summary()
 
 
-async def run_apply_task(selected_jobs, profile):
+def run_apply_task(selected_jobs, profile):
     application_status["running"] = True
     application_status["total"] = len(selected_jobs)
     application_status["current_idx"] = 0
@@ -388,9 +404,9 @@ async def run_apply_task(selected_jobs, profile):
                     "title": job.get('job_title'),
                     "company": job.get('company')
                 }
-                await applier.apply_to_job(job)
+                applier.apply_to_job(job)
         finally:
-            await applier.close()
+            applier.close()
     except Exception as e:
         application_status["error"] = str(e)
     finally:
@@ -425,9 +441,22 @@ async def start_applications_impl(job_ids: List[str], background_tasks: Backgrou
 
     profile = await get_cv_profile()
     print(f"DEBUG: profile loaded: {bool(profile)}")
+
+    # Profile is optional if tailored data already exists for the job.
+    # The apply workflow will load pre-generated tailored docs from disk.
+    # We still need at least an empty dict so the applier can fall back gracefully.
     if not profile:
-        print("DEBUG: raising 400 CV not processed yet")
-        raise HTTPException(status_code=400, detail="CV not processed yet")
+        # Check if all selected jobs have pre-generated tailored data
+        all_have_tailored = all(
+            os.path.exists(os.path.join(APPLICATIONS_DIR, str(j.get('id') or j.get('job_id')), "tailored_cv.json"))
+            for j in selected_jobs
+        )
+        if all_have_tailored:
+            print("DEBUG: No profile but tailored data exists, proceeding with empty profile")
+            profile = {}
+        else:
+            print("DEBUG: raising 400 CV not processed yet")
+            raise HTTPException(status_code=400, detail="CV not processed yet. Please upload your CV first.")
 
     background_tasks.add_task(run_apply_task, selected_jobs, profile)
     print("DEBUG: background task added successfully")
