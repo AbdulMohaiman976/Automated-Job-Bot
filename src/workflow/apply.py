@@ -10,6 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from src.config import USER_AGENT, CANDIDATE_EMAIL
 from src.storage.tracker import log_application, save_tailored_application, JobStatus, APPLICATIONS_DIR
 from src.workflow.optimize import render_tailored_cv_latex
+from src.workflow.indeed_apply import IndeedApplier, _is_indeed_url
 
 # Global events for human-in-the-loop review
 review_event = threading.Event()
@@ -323,39 +324,48 @@ class SequentialApplier:
             return False
 
     def wait_for_cloudflare(self):
-        """Wait if a Cloudflare challenge is detected on the page."""
+        """Wait if a Cloudflare challenge is detected on the current page."""
         try:
             print("Checking for Cloudflare challenge...")
             for i in range(30):
                 title = self.driver.title
-                if "Just a moment" in title or "Attention Required" in title or "Security check" in title or "Cloudflare" in title:
-                    print(f"Cloudflare challenge detected (attempt {i+1}). Waiting...")
-                    if i == 5 or i == 15:
-                        print("Reloading page to attempt to break Cloudflare loop...")
+                cf_titles = ("Just a moment", "Attention Required", "Security check", "Cloudflare")
+                if any(t in title for t in cf_titles):
+                    print(f"  Cloudflare detected (attempt {i+1}). Waiting for you to solve it...")
+                    if i in (5, 15):
                         self.driver.refresh()
                     time.sleep(2)
                 else:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, "#challenge-running, #cf-challenge-running, .cf-browser-verification")
+                    elements = self.driver.find_elements(
+                        By.CSS_SELECTOR,
+                        "#challenge-running, #cf-challenge-running, .cf-browser-verification"
+                    )
                     if elements:
-                         print(f"Cloudflare challenge element detected (attempt {i+1}). Waiting...")
-                         if i == 5 or i == 15:
-                             print("Reloading page to attempt to break Cloudflare loop...")
-                             self.driver.refresh()
-                         time.sleep(2)
+                        print(f"  Cloudflare element detected (attempt {i+1}). Waiting...")
+                        if i in (5, 15):
+                            self.driver.refresh()
+                        time.sleep(2)
                     else:
-                        print("No Cloudflare challenge detected or challenge resolved.")
                         return True
-            print("Cloudflare challenge did not resolve within the timeout.")
+            print("  Cloudflare did not resolve within timeout.")
         except Exception as e:
-             print(f"Error checking Cloudflare: {e}")
+            print(f"  Cloudflare check error: {e}")
         return False
+
+    def wait_for_cloudflare_on_url(self, url: str):
+        """Open a URL then wait for any Cloudflare challenge to clear."""
+        self.driver.get(url)
+        time.sleep(3)
+        self.wait_for_cloudflare()
+        time.sleep(1)
 
     def apply_to_job(self, job):
         job_id = str(job.get('id') or job.get('job_id'))
         job_title = job.get('job_title', 'Unknown Title')
         company = job.get('company', 'Unknown Company')
         job_url = job.get('url') or job.get('job_url')
-        
+        job_source = (job.get('source') or '').lower()
+
         if not job_url:
             log_application(job_id, job_title, company, JobStatus.FAILED, "Missing application URL")
             return False
@@ -372,7 +382,6 @@ class SequentialApplier:
                 job_desc = job.get('description', '')
                 tailored_cv = self.tailor_func(self.cv_data, job_desc)
                 cover_letter = self.cover_letter_func(self.cv_data, job_desc)
-                
                 save_tailored_application(job_id, {
                     "cv": tailored_cv,
                     "cv_latex": render_tailored_cv_latex(tailored_cv),
@@ -383,50 +392,74 @@ class SequentialApplier:
             cv_filepath = _generate_cv_text_file(tailored_cv, job_id)
 
             self.init_browser()
-            self.driver.get(job_url)
-            time.sleep(3)
-            
-            self.wait_for_cloudflare()
-            time.sleep(2)
+            self.wait_for_cloudflare_on_url(job_url)
 
-            print(f"Auto-filling form for {job_title} at {company}...")
-            self.fill_form(tailored_cv, cover_letter, cv_filepath)
+            # ── Route by job source ───────────────────────────────────────────
+            if job_source == 'indeed' or _is_indeed_url(job_url):
+                print(f"[Indeed Agent] Starting for: {job_title} at {company}")
+                agent = IndeedApplier(
+                    driver=self.driver,
+                    cv_data=tailored_cv,
+                    cover_letter=cover_letter,
+                    cv_filepath=cv_filepath,
+                )
+                result = agent.run(job_url)
+
+                if result == 'review_reached':
+                    # Agent stopped at the Review page — HITL proceeds normally
+                    pass
+                elif result == 'external_redirect':
+                    # Indeed redirected to a company site — use generic filler
+                    print(f"[Generic Filler] Filling external form for: {job_title}")
+                    self.wait_for_cloudflare()
+                    self.fill_form(tailored_cv, cover_letter, cv_filepath)
+                else:
+                    # Agent could not proceed — leave whatever is open for human
+                    print(f"[Indeed Agent] Could not reach review page — leaving for human review")
+            else:
+                # Generic path: open URL and fill form directly
+                print(f"[Generic Filler] Filling form for: {job_title} at {company}")
+                self.wait_for_cloudflare()
+                self.fill_form(tailored_cv, cover_letter, cv_filepath)
+
             log_application(job_id, job_title, company, JobStatus.READY)
 
             print(f"--- [Job {job_id}] REVIEW REQUIRED ---")
-            print(f"Role: {job_title}")
-            print(f"Company: {company}")
-            print(f"Action: Please review the auto-filled form in the browser.")
-            print(f"Awaiting signal: 'Submit Done' or 'Skip' from dashboard...")
-            
+            print(f"Role: {job_title} | Company: {company}")
+            print(f"Action: Review the form in the browser, then click 'Submit Done' in the dashboard.")
+
             review_event.clear()
             skip_event.clear()
-            
-            # Wait for user input from the dashboard
+
+            # Wait for human signal
             while not review_event.is_set() and not skip_event.is_set():
-                # Check if browser is closed
                 try:
-                    self.driver.title
+                    self.driver.title  # raises if browser was closed
                 except Exception:
-                    print(f"User closed browser window for: {job_title}")
+                    print(f"Browser closed for: {job_title}")
                     log_application(job_id, job_title, company, JobStatus.FAILED, "User closed browser")
                     return False
                 time.sleep(1)
-            
+
             if skip_event.is_set():
-                print(f"User skipped job: {job_title}")
+                print(f"Skipped: {job_title}")
                 log_application(job_id, job_title, company, JobStatus.FAILED, "User skipped during review")
                 return False
 
             log_application(job_id, job_title, company, JobStatus.SUBMITTED)
-            print(f"Application for {job_title} marked as SUBMITTED.")
-            
-            # Close current tab and open a new blank one to clean up
-            if len(self.driver.window_handles) > 0:
+            print(f"✓ Submitted: {job_title}")
+
+            # Clean up: close tab and open blank to keep browser alive for next job
+            try:
                 self.driver.close()
-            if len(self.driver.window_handles) == 0:
-                 self.driver.execute_script("window.open('');")
-                 self.driver.switch_to.window(self.driver.window_handles[-1])
+            except Exception:
+                pass
+            try:
+                if not self.driver.window_handles:
+                    self.driver.execute_script("window.open('');")
+                self.driver.switch_to.window(self.driver.window_handles[-1])
+            except Exception:
+                pass
 
             return True
 

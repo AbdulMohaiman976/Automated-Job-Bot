@@ -258,7 +258,7 @@ def render_tailored_cv_latex(cv_data):
             year = _latex_escape(_pick_text(edu, ["year", "duration", "dates"]))
             city = _latex_escape(_pick_text(edu, ["location", "city"]))
             lines.append(r"\heading{" + (institution or "University Name") + "}{" + (year or "Year -- Year") + "}")
-            lines.append(r"\textit{" + (degree or "Degree Title") + "} \hfill " + (city or "City, Country"))
+            lines.append(r"\textit{" + (degree or "Degree Title") + r"} \hfill " + (city or "City, Country"))
     else:
         lines.extend([
             r"\heading{University Name}{Year -- Year}",

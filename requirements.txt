@@ -12,3 +12,5 @@ python-docx>=1.1.2
 groq>=0.11.0
 selenium>=4.15.0
 undetected-chromedriver>=3.5.0
+python-multipart>=0.0.9
+setuptools>=65.0.0
