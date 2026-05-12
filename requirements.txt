@@ -14,3 +14,6 @@ selenium>=4.15.0
 undetected-chromedriver>=3.5.0
 python-multipart>=0.0.9
 setuptools>=65.0.0
+langgraph>=1.0.0
+langchain-groq>=1.1.0
+langchain-core>=1.0.0

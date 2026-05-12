@@ -11,6 +11,7 @@ from src.config import USER_AGENT, CANDIDATE_EMAIL
 from src.storage.tracker import log_application, save_tailored_application, JobStatus, APPLICATIONS_DIR
 from src.workflow.optimize import render_tailored_cv_latex
 from src.workflow.indeed_apply import IndeedApplier, _is_indeed_url
+from src.workflow.linkedin_apply import run_linkedin_agent
 
 # Global events for human-in-the-loop review
 review_event = threading.Event()
@@ -395,7 +396,27 @@ class SequentialApplier:
             self.wait_for_cloudflare_on_url(job_url)
 
             # ── Route by job source ───────────────────────────────────────────
-            if job_source == 'indeed' or _is_indeed_url(job_url):
+            if job_source == 'linkedin' or 'linkedin.com' in job_url.lower():
+                print(f"[LinkedIn Agent] Starting LangGraph agent for: {job_title} at {company}")
+                result = run_linkedin_agent(
+                    driver=self.driver,
+                    job_url=job_url,
+                    cv_data=tailored_cv,
+                    cover_letter=cover_letter,
+                    cv_filepath=cv_filepath,
+                )
+                if result == 'external':
+                    # LinkedIn job redirects to external site — use generic filler
+                    print(f"[Generic Filler] LinkedIn external apply for: {job_title}")
+                    self.wait_for_cloudflare()
+                    self.fill_form(tailored_cv, cover_letter, cv_filepath)
+                elif result == 'already_applied':
+                    log_application(job_id, job_title, company, JobStatus.SUBMITTED, "Already applied via LinkedIn")
+                    return True
+                elif result == 'failed':
+                    print(f"[LinkedIn Agent] Could not complete — leaving browser open for manual apply")
+
+            elif job_source == 'indeed' or _is_indeed_url(job_url):
                 print(f"[Indeed Agent] Starting for: {job_title} at {company}")
                 agent = IndeedApplier(
                     driver=self.driver,
@@ -404,18 +425,13 @@ class SequentialApplier:
                     cv_filepath=cv_filepath,
                 )
                 result = agent.run(job_url)
-
-                if result == 'review_reached':
-                    # Agent stopped at the Review page — HITL proceeds normally
-                    pass
-                elif result == 'external_redirect':
-                    # Indeed redirected to a company site — use generic filler
-                    print(f"[Generic Filler] Filling external form for: {job_title}")
+                if result == 'external_redirect':
+                    print(f"[Generic Filler] Indeed external apply for: {job_title}")
                     self.wait_for_cloudflare()
                     self.fill_form(tailored_cv, cover_letter, cv_filepath)
-                else:
-                    # Agent could not proceed — leave whatever is open for human
+                elif result == 'failed':
                     print(f"[Indeed Agent] Could not reach review page — leaving for human review")
+
             else:
                 # Generic path: open URL and fill form directly
                 print(f"[Generic Filler] Filling form for: {job_title} at {company}")
