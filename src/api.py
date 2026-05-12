@@ -356,8 +356,12 @@ async def tailor_job(job_id: str):
         raise HTTPException(status_code=400, detail="CV not processed yet")
         
     try:
-        t_cv = tailor_cv(profile, job.get('description', ''))
-        t_cl = generate_cover_letter(profile, job.get('description', ''))
+        import time as _time
+        # Truncate description to avoid token limits on either Groq call
+        description = (job.get('description') or '')[:4000]
+        t_cv = tailor_cv(profile, description)
+        _time.sleep(1)  # brief pause so back-to-back Groq calls don't hit rate limits
+        t_cl = generate_cover_letter(profile, description)
         t_latex = render_tailored_cv_latex(t_cv)
         payload = {"cv": t_cv, "cv_latex": t_latex, "cover_letter": t_cl}
         save_tailored_application(job_id, payload)

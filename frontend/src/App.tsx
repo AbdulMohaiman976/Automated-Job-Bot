@@ -696,9 +696,14 @@ const App: React.FC = () => {
                           <div className="preview-pane">
                             <div className="pane-header"><FileText size={16} /> Cover Letter</div>
                             <div className="cover-letter-formatted">
-                              {tailoredPreview.cover_letter?.split('\n').map((line: string, i: number) => (
-                                <p key={i} style={{ minHeight: line.trim() ? undefined : '0.75rem' }}>{line}</p>
-                              ))}
+                              {tailoredPreview.cover_letter && tailoredPreview.cover_letter.trim()
+                                ? tailoredPreview.cover_letter.split('\n').map((line: string, i: number) => (
+                                    <p key={i} style={{ minHeight: line.trim() ? undefined : '0.75rem' }}>{line}</p>
+                                  ))
+                                : <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                    Cover letter could not be generated. Click <strong>Re-generate</strong> to try again.
+                                  </p>
+                              }
                             </div>
                           </div>
                         </div>

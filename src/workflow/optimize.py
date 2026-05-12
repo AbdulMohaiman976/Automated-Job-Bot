@@ -105,6 +105,9 @@ def tailor_cv(cv_data, job_description):
         return cv_data  # Fallback to original
 
 def generate_cover_letter(cv_data, job_description):
+    # Truncate to stay well within token limits
+    job_desc_trimmed = (job_description or "")[:3000]
+
     prompt = f"""
     Write a job-specific professional cover letter based ONLY on the candidate CV and this job description.
 
@@ -124,16 +127,35 @@ def generate_cover_letter(cv_data, job_description):
     {json.dumps(cv_data, indent=2)}
 
     JOB DESCRIPTION:
-    {job_description}
+    {job_desc_trimmed}
 
-    Return ONLY the cover letter text.
+    Return ONLY the cover letter text. No preamble, no commentary.
     """
-    
+
     try:
-        return call_groq_with_retry([{"role": "user", "content": prompt}], temperature=0.7)
+        return call_groq_with_retry(
+            [{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_retries=4,
+        )
     except Exception as e:
         print(f"Error generating cover letter: {e}")
-        return "Professional cover letter could not be generated at this time."
+        # Fallback: generate a simpler cover letter with less context
+        try:
+            name = cv_data.get("full_name", "the candidate")
+            summary = cv_data.get("summary", "")
+            simple_prompt = f"""Write a short professional cover letter (150 words max) for {name}.
+Candidate summary: {summary}
+Job context: {job_desc_trimmed[:500]}
+Return only the cover letter text."""
+            return call_groq_with_retry(
+                [{"role": "user", "content": simple_prompt}],
+                temperature=0.7,
+                max_retries=2,
+            )
+        except Exception as e2:
+            print(f"Fallback cover letter also failed: {e2}")
+            return ""
 
 
 def render_tailored_cv_latex(cv_data):

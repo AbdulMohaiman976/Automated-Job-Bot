@@ -206,6 +206,67 @@ class IndeedApplier:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ login handling
+
+    def _is_login_wall(self) -> bool:
+        """Detect if Indeed is showing a login/signup prompt or modal."""
+        try:
+            url = self.driver.current_url.lower()
+            if any(k in url for k in ('login', 'signin', 'sign-in', '/account/', 'auth')):
+                return True
+            # Check for visible login-specific elements
+            login_selectors = [
+                "button[data-tn-element='google-auth-button']",
+                "#ifl-GoogleSignInButton",
+                "a[href*='accounts.google.com']",
+                "button[class*='google' i]",
+                "div[id*='loginPage' i]",
+                "div[class*='SignIn' i]",
+                "form[id*='login' i]",
+            ]
+            for sel in login_selectors:
+                els = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                if any(e.is_displayed() for e in els):
+                    return True
+            # Text-based fallback
+            body = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+            return (
+                ("continue with google" in body or "continue with email" in body)
+                and ("sign in" in body or "log in" in body or "create account" in body)
+            )
+        except Exception:
+            return False
+
+    def _wait_for_login(self, timeout_seconds: int = 300) -> bool:
+        """
+        Pause and wait for the user to complete Indeed login in the browser.
+        Returns True once login is detected, False on timeout.
+        """
+        print()
+        print("=" * 62)
+        print("  ⚠  INDEED LOGIN REQUIRED")
+        print("  Please log in to Indeed in the Chrome window")
+        print("  (Continue with Google OR Continue with email).")
+        print(f"  Waiting up to {timeout_seconds // 60} minutes for you to log in...")
+        print("=" * 62)
+        print()
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            time.sleep(2)
+            try:
+                if not self._is_login_wall():
+                    url = self.driver.current_url.lower()
+                    if 'indeed.com' in url:
+                        print("  ✓ Login complete — continuing application...")
+                        time.sleep(2)
+                        return True
+            except Exception:
+                pass
+
+        print("  ✗ Login wait timed out — leaving page open for human review")
+        return False
+
     # ------------------------------------------------------------------ navigation
 
     def _on_review_page(self) -> bool:
@@ -283,18 +344,38 @@ class IndeedApplier:
         self.driver.get(job_url)
         time.sleep(3)
 
+        # Handle login wall BEFORE clicking Apply (page may redirect to login on load)
+        if self._is_login_wall():
+            logged_in = self._wait_for_login()
+            if not logged_in:
+                return 'failed'
+            # After login Indeed usually redirects back to the job — reload to be safe
+            if not _is_indeed_url(self.driver.current_url) or 'viewjob' not in self.driver.current_url:
+                self.driver.get(job_url)
+                time.sleep(3)
+
+        # Click the Apply button on the listing page
         clicked = self._click(self._APPLY_BTN, "Apply button")
         if not clicked:
-            # Some scraper URLs land directly on the application — try anyway
             print("  ⚠ Apply button not found — checking if already on an application page")
             if self._on_review_page():
                 return 'review_reached'
-            # Fall back: give control to generic filler
             return 'external_redirect'
 
         time.sleep(2)
 
-        # Check if we were redirected off Indeed (external company site)
+        # Login wall can also appear AFTER clicking Apply (session expired mid-session)
+        if self._is_login_wall():
+            logged_in = self._wait_for_login()
+            if not logged_in:
+                return 'failed'
+            # Re-click Apply after login
+            self.driver.get(job_url)
+            time.sleep(3)
+            self._click(self._APPLY_BTN, "Apply button (after login)")
+            time.sleep(2)
+
+        # If we were redirected off Indeed, it's an external application
         if not _is_indeed_url(self.driver.current_url):
             print(f"  → Redirected to external site: {self.driver.current_url}")
             return 'external_redirect'
