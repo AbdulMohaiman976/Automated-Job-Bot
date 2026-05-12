@@ -149,8 +149,7 @@ class SequentialApplier:
             os.makedirs(user_data_dir, exist_ok=True)
             options.add_argument(f"--user-data-dir={user_data_dir}")
             
-            # Explicitly use version_main=147 because the installed Chrome version is 147
-            self.driver = uc.Chrome(options=options, version_main=147)
+            self.driver = uc.Chrome(options=options)
             
             # Deep stealth overriding
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {

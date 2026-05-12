@@ -197,6 +197,9 @@ def _is_login_wall(driver) -> bool:
         url = driver.current_url.lower()
         if any(k in url for k in ("login", "signin", "sign-in", "authwall", "checkpoint", "uas/oauth")):
             return True
+        # Treat Google OAuth page as still-in-login (user may have clicked "Continue with Google")
+        if "accounts.google.com" in url or "google.com/o/oauth" in url:
+            return True
         login_selectors = [
             "#username", "#password",
             "form[action*='login']",
@@ -349,9 +352,20 @@ def node_wait_login(state: LinkedInState) -> dict:
     print()
     print("=" * 64)
     print("  ⚠  LINKEDIN LOGIN REQUIRED")
-    print("  Please log in to LinkedIn in the Chrome window.")
-    print("  You can use Google sign-in or your email and password.")
-    print(f"  Waiting up to {timeout // 60} minutes for you to log in...")
+    print()
+    print("  IMPORTANT: Use your LinkedIn EMAIL + PASSWORD to sign in.")
+    print("  Do NOT click 'Continue with Google' — Google blocks sign-in")
+    print("  from automated browsers and the window will close.")
+    print()
+    print("  Steps:")
+    print("    1. Click 'Sign in' in the Chrome window")
+    print("    2. Enter your LinkedIn email and password")
+    print("    3. Complete any verification if asked")
+    print("    4. The bot will continue automatically once logged in")
+    print()
+    print("  After first login your session is saved — future runs")
+    print("  will not need to log in again.")
+    print(f"  Waiting up to {timeout // 60} minutes...")
     print("=" * 64)
     print()
 
@@ -367,7 +381,11 @@ def node_wait_login(state: LinkedInState) -> dict:
                     driver.get(state["job_url"])
                     time.sleep(3)
                     return {"login_done": True}
-        except Exception:
+        except Exception as e:
+            err = str(e).lower()
+            # Browser was closed by user or crashed
+            if any(k in err for k in ("no such window", "target window", "session deleted", "unable to connect")):
+                return {"result": "failed", "error": "Browser was closed during login"}
             pass
 
     return {"result": "failed", "error": "Login timed out after 5 minutes"}
