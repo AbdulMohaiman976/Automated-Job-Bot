@@ -204,17 +204,17 @@ class SequentialApplier:
                 if elements:
                     # Input type=file doesn't need to be displayed to accept keys
                     elements[0].send_keys(os.path.abspath(filepath))
-                    print(f"  ✓ Uploaded CV file via: {selector}")
+                    print(f"  [OK] Uploaded CV file via: {selector}")
                     return True
 
             all_file_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
             if all_file_inputs:
                 all_file_inputs[0].send_keys(os.path.abspath(filepath))
-                print(f"  ✓ Uploaded CV file via first file input")
+                print(f"  [OK] Uploaded CV file via first file input")
                 return True
 
         except Exception as e:
-            print(f"  ⚠ File upload failed: {e}")
+            print(f"  [WARN] File upload failed: {e}")
         return False
 
     def fill_form(self, tailored_cv, cover_letter, cv_filepath=None):
@@ -317,7 +317,7 @@ class SequentialApplier:
                     "textarea[placeholder*='cover letter' i]",
                 ], cover_letter)
 
-            print("  ✓ Form auto-fill completed")
+            print("  [OK] Form auto-fill completed")
             return True
         except Exception as e:
             print(f"Error during auto-fill: {e}")
@@ -462,7 +462,7 @@ class SequentialApplier:
                 return False
 
             log_application(job_id, job_title, company, JobStatus.SUBMITTED)
-            print(f"✓ Submitted: {job_title}")
+            print(f"[OK] Submitted: {job_title}")
 
             # Clean up: close tab and open blank to keep browser alive for next job
             try:

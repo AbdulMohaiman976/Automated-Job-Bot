@@ -13,6 +13,12 @@ import shutil
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
+# Force UTF-8 encoding for Windows terminals to prevent 'charmap' crashes
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 from src.workflow.discover import run_discovery
 from src.utils.cv_processor import process_cv
 from src.workflow.optimize import tailor_cv, generate_cover_letter, render_tailored_cv_latex
@@ -324,7 +330,7 @@ async def get_cv_file():
     )
 
 @app.get("/cv/profile")
-async def get_cv_profile():
+def get_cv_profile():
     profile_path = os.path.join(PROFILES_DIR, "parsed_profile.json")
     if not os.path.exists(profile_path):
         return {}
@@ -339,7 +345,7 @@ async def get_tailored_details(job_id: str):
     return tailored_payload
 
 @app.post("/jobs/tailor/{job_id}")
-async def tailor_job(job_id: str):
+def tailor_job(job_id: str):
     latest_unique_file = get_latest_jobs_file("unique")
     latest_all_file = get_latest_jobs_file("all")
     if not latest_unique_file and not latest_all_file:
@@ -351,20 +357,27 @@ async def tailor_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
         
     # Get profile
-    profile = await get_cv_profile()
+    profile = get_cv_profile()
     if not profile:
         raise HTTPException(status_code=400, detail="CV not processed yet")
         
     try:
         import time as _time
+        print(f"[PROCESS] Tailoring CV for job: {job_id}...")
         # Truncate description to avoid token limits on either Groq call
         description = (job.get('description') or '')[:4000]
         t_cv = tailor_cv(profile, description)
+        
+        print(f"[PROCESS] Generating cover letter for job: {job_id}...")
         _time.sleep(1)  # brief pause so back-to-back Groq calls don't hit rate limits
         t_cl = generate_cover_letter(profile, description)
+        
+        print(f"[PROCESS] Rendering LaTeX version...")
         t_latex = render_tailored_cv_latex(t_cv)
+        
         payload = {"cv": t_cv, "cv_latex": t_latex, "cover_letter": t_cl}
         save_tailored_application(job_id, payload)
+        print(f"[OK] Tailoring complete for: {job_id}")
         return {"message": "Job tailored successfully", "job_id": job_id, "tailored": payload}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -443,7 +456,7 @@ async def start_applications_impl(job_ids: List[str], background_tasks: Backgrou
         print("DEBUG: raising 404 No valid jobs selected")
         raise HTTPException(status_code=404, detail="No valid jobs selected")
 
-    profile = await get_cv_profile()
+    profile = get_cv_profile()
     print(f"DEBUG: profile loaded: {bool(profile)}")
 
     # Profile is optional if tailored data already exists for the job.

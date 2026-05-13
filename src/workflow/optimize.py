@@ -47,7 +47,8 @@ def call_groq_with_retry(messages, model="llama-3.3-70b-versatile", temperature=
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not found in environment")
     
-    client = Groq(api_key=GROQ_API_KEY)
+    # Set a 60-second timeout to prevent infinite hangs
+    client = Groq(api_key=GROQ_API_KEY, timeout=60.0)
     
     for attempt in range(max_retries):
         try:
@@ -59,8 +60,9 @@ def call_groq_with_retry(messages, model="llama-3.3-70b-versatile", temperature=
             return response.choices[0].message.content.strip()
         except Exception as e:
             if attempt == max_retries - 1:
+                print(f"[ERR] Groq API failed after {max_retries} attempts: {e}")
                 raise e
-            print(f"Groq API error (attempt {attempt + 1}/{max_retries}): {e}")
+            print(f"[WARN] Groq API error (attempt {attempt + 1}/{max_retries}): {e}")
             time.sleep(2 ** attempt) # Exponential backoff
 
 def tailor_cv(cv_data, job_description):

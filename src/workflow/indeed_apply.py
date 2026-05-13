@@ -154,10 +154,10 @@ class IndeedApplier:
             inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
             if inputs:
                 inputs[0].send_keys(os.path.abspath(self.cv_filepath))
-                print("    ✓ Uploaded resume file")
+                print("    [OK] Uploaded resume file")
                 time.sleep(1.5)
         except Exception as e:
-            print(f"    ⚠ Resume upload error: {e}")
+            print(f"    [WARN] Resume upload error: {e}")
 
     def _fill_cover_letter(self):
         if not self.cover_letter:
@@ -244,7 +244,7 @@ class IndeedApplier:
         """
         print()
         print("=" * 62)
-        print("  ⚠  INDEED LOGIN REQUIRED")
+        print("  [WARN]  INDEED LOGIN REQUIRED")
         print("  Please log in to Indeed in the Chrome window")
         print("  (Continue with Google OR Continue with email).")
         print(f"  Waiting up to {timeout_seconds // 60} minutes for you to log in...")
@@ -258,13 +258,13 @@ class IndeedApplier:
                 if not self._is_login_wall():
                     url = self.driver.current_url.lower()
                     if 'indeed.com' in url:
-                        print("  ✓ Login complete — continuing application...")
+                        print("  [OK] Login complete — continuing application...")
                         time.sleep(2)
                         return True
             except Exception:
                 pass
 
-        print("  ✗ Login wait timed out — leaving page open for human review")
+        print("  [ERR] Login wait timed out — leaving page open for human review")
         return False
 
     # ------------------------------------------------------------------ navigation
@@ -287,7 +287,7 @@ class IndeedApplier:
             self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
             time.sleep(0.3)
             el.click()
-            print(f"    ✓ Clicked {label}")
+            print(f"    [OK] Clicked {label}")
             time.sleep(2)
             return True
         except ElementClickInterceptedException:
@@ -308,10 +308,10 @@ class IndeedApplier:
 
     def _navigate_to_review(self, max_steps: int = 12) -> bool:
         for step in range(1, max_steps + 1):
-            print(f"  → Indeed apply step {step}")
+            print(f"  -> Indeed apply step {step}")
 
             if self._on_review_page():
-                print("  ✓ Reached Review page — pausing for human review")
+                print("  [OK] Reached Review page — pausing for human review")
                 return True
 
             self._fill_current_step()
@@ -321,12 +321,12 @@ class IndeedApplier:
             if not advanced:
                 # Maybe we're already on review
                 if self._on_review_page():
-                    print("  ✓ Reached Review page — pausing for human review")
+                    print("  [OK] Reached Review page — pausing for human review")
                     return True
-                print(f"  ⚠ Stuck on step {step} — leaving for human review")
+                print(f"  [WARN] Stuck on step {step} — leaving for human review")
                 return False
 
-        print("  ⚠ Max steps reached without finding Review page")
+        print("  [WARN] Max steps reached without finding Review page")
         return False
 
     # ------------------------------------------------------------------ public
@@ -357,7 +357,7 @@ class IndeedApplier:
         # Click the Apply button on the listing page
         clicked = self._click(self._APPLY_BTN, "Apply button")
         if not clicked:
-            print("  ⚠ Apply button not found — checking if already on an application page")
+            print("  [WARN] Apply button not found — checking if already on an application page")
             if self._on_review_page():
                 return 'review_reached'
             return 'external_redirect'
@@ -377,7 +377,7 @@ class IndeedApplier:
 
         # If we were redirected off Indeed, it's an external application
         if not _is_indeed_url(self.driver.current_url):
-            print(f"  → Redirected to external site: {self.driver.current_url}")
+            print(f"  -> Redirected to external site: {self.driver.current_url}")
             return 'external_redirect'
 
         success = self._navigate_to_review()

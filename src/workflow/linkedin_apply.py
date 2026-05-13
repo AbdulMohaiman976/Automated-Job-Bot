@@ -2,9 +2,9 @@
 LinkedIn Easy Apply agent built with LangGraph.
 
 Graph:
-  START → open_job → check_login → [wait_login →] click_easy_apply
-        → fill_step ⟷ advance (loop) → review → END
-                                      → handle_error → END
+  START -> open_job -> check_login -> [wait_login ->] click_easy_apply
+        -> fill_step ⟷ advance (loop) -> review -> END
+                                      -> handle_error -> END
 
 The LLM (Groq) is used only where intelligence is genuinely needed:
   - Screening questions: reads the question, answers from CV evidence
@@ -101,7 +101,7 @@ def _click(driver, selectors: list, label: str = "", timeout: float = 8) -> bool
         time.sleep(0.3)
         el.click()
         if label:
-            print(f"    ✓ Clicked: {label}")
+            print(f"    [OK] Clicked: {label}")
         time.sleep(1.5)
         return True
     except ElementClickInterceptedException:
@@ -267,14 +267,14 @@ CANDIDATE CV:
 
 TASK: Return the correct value for each field based ONLY on the candidate's CV.
 Rules:
-- "years of experience" → calculate from CV dates (be conservative)
-- work authorization / eligibility → "Yes"
-- "how did you hear" → "LinkedIn"
-- salary / compensation → leave empty ("")
-- open-text questions → 1-2 sentences using CV evidence only, never fabricate
-- yes/no radio → answer "yes" for standard eligibility questions
-- "notice period" / "when can you start" → "Immediately" or "2 weeks"
-- if a question can't be answered from CV → return ""
+- "years of experience" -> calculate from CV dates (be conservative)
+- work authorization / eligibility -> "Yes"
+- "how did you hear" -> "LinkedIn"
+- salary / compensation -> leave empty ("")
+- open-text questions -> 1-2 sentences using CV evidence only, never fabricate
+- yes/no radio -> answer "yes" for standard eligibility questions
+- "notice period" / "when can you start" -> "Immediately" or "2 weeks"
+- if a question can't be answered from CV -> return ""
 
 Return a JSON array ONLY, no explanation:
 [{{"id": "field_id", "value": "answer"}}, ...]"""
@@ -285,7 +285,7 @@ Return a JSON array ONLY, no explanation:
             text = text[text.find("["):text.rfind("]") + 1]
         return json.loads(text)
     except Exception as e:
-        print(f"    ⚠ LLM screening answer error: {e}")
+        print(f"    [WARN] LLM screening answer error: {e}")
         return []
 
 
@@ -351,7 +351,7 @@ def node_wait_login(state: LinkedInState) -> dict:
     timeout = 300
     print()
     print("=" * 64)
-    print("  ⚠  LINKEDIN LOGIN REQUIRED")
+    print("  [WARN]  LINKEDIN LOGIN REQUIRED")
     print()
     print("  IMPORTANT: Use your LinkedIn EMAIL + PASSWORD to sign in.")
     print("  Do NOT click 'Continue with Google' — Google blocks sign-in")
@@ -376,7 +376,7 @@ def node_wait_login(state: LinkedInState) -> dict:
             if not _is_login_wall(driver):
                 url = driver.current_url.lower()
                 if "linkedin.com" in url:
-                    print("  ✓ Login complete — navigating back to the job...")
+                    print("  [OK] Login complete — navigating back to the job...")
                     time.sleep(1)
                     driver.get(state["job_url"])
                     time.sleep(3)
@@ -411,14 +411,14 @@ def node_click_easy_apply(state: LinkedInState) -> dict:
             "a[data-control-name='jobdetails_topcard_inapply']",
         ]
         if _find(driver, external_selectors, timeout=3):
-            print("  → External apply button found (not Easy Apply) — falling back to generic filler")
+            print("  -> External apply button found (not Easy Apply) — falling back to generic filler")
             return {"result": "external"}
 
         # Check if already applied
         try:
             body = driver.find_element(By.TAG_NAME, "body").text.lower()
             if "applied" in body and "you applied" in body:
-                print("  → Already applied to this job")
+                print("  -> Already applied to this job")
                 return {"result": "already_applied"}
         except Exception:
             pass
@@ -432,7 +432,7 @@ def node_click_easy_apply(state: LinkedInState) -> dict:
     if not modal:
         return {"result": "failed", "error": "Easy Apply modal did not open after clicking"}
 
-    print("  ✓ Easy Apply modal opened")
+    print("  [OK] Easy Apply modal opened")
     return {}
 
 
@@ -443,7 +443,7 @@ def node_fill_step(state: LinkedInState) -> dict:
     driver = state["driver"]
     cv = state["cv_data"]
 
-    print(f"  → Filling modal step {state['step_count'] + 1}")
+    print(f"  -> Filling modal step {state['step_count'] + 1}")
 
     # ── 1. Contact info (deterministic) ───────────────────────────────────────
     phone = cv.get("phone", "")
@@ -473,7 +473,7 @@ def node_fill_step(state: LinkedInState) -> dict:
             for fi in file_inputs:
                 try:
                     fi.send_keys(os.path.abspath(cv_filepath))
-                    print("    ✓ Uploaded resume")
+                    print("    [OK] Uploaded resume")
                     time.sleep(1.5)
                     break
                 except Exception:
@@ -504,7 +504,7 @@ def node_fill_step(state: LinkedInState) -> dict:
         llm_answers = _llm_answer_fields(cv, unfilled, context)
         if llm_answers:
             _apply_llm_answers(driver, llm_answers)
-            print(f"    ✓ LLM answered {len(llm_answers)} screening field(s)")
+            print(f"    [OK] LLM answered {len(llm_answers)} screening field(s)")
 
     # ── 5. Fallback: radio Yes/No groups ──────────────────────────────────────
     try:
@@ -553,7 +553,7 @@ def node_advance(state: LinkedInState) -> dict:
                 aria = (btn.get_attribute("aria-label") or "").lower()
                 if any(k in txt or k in aria for k in ("next", "continue", "review")):
                     driver.execute_script("arguments[0].click();", btn)
-                    print("    ✓ Clicked footer Next button (fallback)")
+                    print("    [OK] Clicked footer Next button (fallback)")
                     time.sleep(2)
                     clicked = True
                     break
@@ -571,7 +571,7 @@ def node_review(state: LinkedInState) -> dict:
     """Reached the LinkedIn Review page — pause for human-in-the-loop."""
     print()
     print("=" * 64)
-    print("  ✓  LINKEDIN APPLICATION FULLY FILLED")
+    print("  [OK]  LINKEDIN APPLICATION FULLY FILLED")
     print("  Review the pre-filled form in the Chrome window.")
     print("  Make any edits you need, then:")
     print("    1. Click 'Submit application' in LinkedIn")
@@ -584,7 +584,7 @@ def node_review(state: LinkedInState) -> dict:
 def node_handle_error(state: LinkedInState) -> dict:
     err = state.get("error") or state.get("result") or "unknown error"
     result = state.get("result") or "failed"
-    print(f"  ✗ LinkedIn agent stopped: {err}")
+    print(f"  [ERR] LinkedIn agent stopped: {err}")
     if result not in ("external", "already_applied"):
         print("  Leaving browser open — you can apply manually.")
     return {"result": result or "failed"}
