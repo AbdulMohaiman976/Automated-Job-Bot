@@ -6,12 +6,14 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
 
 from src.config import USER_AGENT, CANDIDATE_EMAIL
-from src.storage.tracker import log_application, save_tailored_application, JobStatus, APPLICATIONS_DIR
+from src.storage.tracker import log_application, save_tailored_application, JobStatus, APPLICATIONS_DIR, UPLOADS_DIR
 from src.workflow.optimize import render_tailored_cv_latex
 from src.workflow.indeed_apply import IndeedApplier, _is_indeed_url
 from src.workflow.linkedin_apply import run_linkedin_agent
+import glob
 
 # Global events for human-in-the-loop review
 review_event = threading.Event()
@@ -130,6 +132,23 @@ def _generate_cv_text_file(cv_data, job_id):
     return filepath
 
 
+def _get_latest_uploaded_resume():
+    """Return the absolute path to the latest uploaded PDF or DOCX resume in UPLOADS_DIR."""
+    if not os.path.exists(UPLOADS_DIR):
+        return None
+    files = []
+    for ext in ("*.pdf", "*.docx", "*.doc"):
+        files.extend(glob.glob(os.path.join(UPLOADS_DIR, ext)))
+    if not files:
+        # Check any files
+        files = [os.path.join(UPLOADS_DIR, f) for f in os.listdir(UPLOADS_DIR) if os.path.isfile(os.path.join(UPLOADS_DIR, f))]
+    if not files:
+        return None
+    # Sort by modification time desc
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files[0]
+
+
 class SequentialApplier:
     def __init__(self, cv_data, tailor_func, cover_letter_func):
         self.cv_data = cv_data
@@ -163,20 +182,29 @@ class SequentialApplier:
     def _try_fill(self, selector, value):
         """Try to fill a form field matching the selector, returns True if found."""
         try:
-            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+            by_type = By.XPATH if selector.startswith("/") or selector.startswith("xpath:") else By.CSS_SELECTOR
+            actual_sel = selector[6:] if selector.startswith("xpath:") else selector
+            elements = self.driver.find_elements(by_type, actual_sel)
             for el in elements:
                 if el.is_displayed():
-                    self.driver.execute_script("arguments[0].scrollIntoView(true);", el)
+                    self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
                     time.sleep(0.15)
                     try:
                         el.click()
                     except:
                         pass
-                    el.clear()
+                    # Use keys-based clear to trigger React/Vue synthetic events reliably
+                    try:
+                        el.send_keys(Keys.CONTROL + "a")
+                        el.send_keys(Keys.BACKSPACE)
+                    except Exception:
+                        el.clear()
+                    time.sleep(0.1)
                     el.send_keys(str(value))
+                    print(f"  [OK] Filled field: '{selector}' -> '{value}'")
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [DEBUG] Error filling selector '{selector}': {e}")
         return False
 
     def _try_fill_any(self, selectors, value):
@@ -217,8 +245,63 @@ class SequentialApplier:
             print(f"  [WARN] File upload failed: {e}")
         return False
 
+    def _click_initial_apply_button(self):
+        """Locate and click the initial 'Apply' / 'Apply Now' button on an external site if the form is not visible yet."""
+        try:
+            # First, check if form elements are already visible. If yes, we don't need to click any button!
+            form_elements = self.driver.find_elements(
+                By.CSS_SELECTOR, 
+                "input[name*='name' i], input[id*='name' i], input[type='email'], input[type='file'], textarea"
+            )
+            if any(el.is_displayed() for el in form_elements):
+                print("  Form fields already visible on landing. Skipping initial apply click.")
+                return True
+        except Exception:
+            pass
+
+        print("  Form fields not visible. Searching for initial 'Apply' / 'Apply Now' button on portal...")
+        
+        apply_selectors = [
+            "xpath://a[contains(translate(., 'APLY', 'aply'), 'apply') and not(contains(translate(., 'EASY', 'easy'), 'easy'))]",
+            "xpath://button[contains(translate(., 'APLY', 'aply'), 'apply') and not(contains(translate(., 'EASY', 'easy'), 'easy'))]",
+            "a[href*='/apply' i]",
+            "a[href*='apply' i]",
+            "button[class*='apply' i]",
+            "a[class*='apply' i]",
+            "a[class*='btn' i]",
+            "button[class*='btn' i]"
+        ]
+
+        for sel in apply_selectors:
+            try:
+                by_type = By.XPATH if sel.startswith("xpath:") else By.CSS_SELECTOR
+                actual_sel = sel[6:] if sel.startswith("xpath:") else sel
+                elements = self.driver.find_elements(by_type, actual_sel)
+                for el in elements:
+                    if el.is_displayed() and el.is_enabled():
+                        text = el.text.strip().replace("\n", " ")
+                        href = el.get_attribute("href") or ""
+                        print(f"  [OK] Found initial apply button: '{text}' (href='{href}'). Clicking it...")
+                        self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                        time.sleep(0.3)
+                        try:
+                            el.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", el)
+                        time.sleep(3.5) # Wait for page or form container to render
+                        self.wait_for_cloudflare()
+                        return True
+            except Exception as e:
+                print(f"  [DEBUG] Error checking initial apply selector '{sel}': {e}")
+        
+        print("  [WARN] No initial apply button found or clicked.")
+        return False
+
     def fill_form(self, tailored_cv, cover_letter, cv_filepath=None):
         try:
+            # 0. Try clicking the initial Apply button if the site requires a transition first
+            self._click_initial_apply_button()
+
             full_name = tailored_cv.get("full_name", "")
             email = tailored_cv.get("email", "") or CANDIDATE_EMAIL
             phone = tailored_cv.get("phone", "")
@@ -229,11 +312,13 @@ class SequentialApplier:
             first_name = name_parts[0] if name_parts else ""
             last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
+            # 1. Resume File Upload
             if cv_filepath and os.path.exists(cv_filepath):
+                print(f"  Attempting file upload of: {cv_filepath}")
                 self._try_upload_file(cv_filepath)
-                time.sleep(1)
+                time.sleep(1.5)
 
-            # Identity fields
+            # 2. Identity fields
             self._try_fill_any([
                 "input[name*='full_name' i]", "input[id*='full_name' i]",
                 "input[name*='fullname' i]", "input[id*='fullname' i]",
@@ -280,6 +365,7 @@ class SequentialApplier:
                     "input[placeholder*='city' i]",
                 ], location)
 
+            # 3. Web links
             links = tailored_cv.get('links', [])
             if isinstance(links, list):
                 for link in links:
@@ -288,11 +374,13 @@ class SequentialApplier:
                         self._try_fill_any([
                             "input[name*='linkedin' i]", "input[id*='linkedin' i]",
                             "input[placeholder*='linkedin' i]",
+                            "input[name*='link' i][name*='in' i]",
                         ], link)
                     elif 'github' in l_lower:
                         self._try_fill_any([
                             "input[name*='github' i]", "input[id*='github' i]",
                             "input[placeholder*='github' i]",
+                            "input[name*='git' i]",
                         ], link)
                     elif 'portfolio' in l_lower or 'website' in l_lower:
                         self._try_fill_any([
@@ -300,8 +388,10 @@ class SequentialApplier:
                             "input[name*='website' i]", "input[id*='website' i]",
                             "input[placeholder*='website' i]",
                             "input[placeholder*='portfolio' i]",
+                            "input[name*='personal' i][name*='site' i]",
                         ], link)
 
+            # 4. Cover Letter & Summary textareas
             if summary:
                 self._try_fill_any([
                     "textarea[name*='summary' i]", "textarea[id*='summary' i]",
@@ -316,6 +406,60 @@ class SequentialApplier:
                     "textarea[name*='motivation' i]", "textarea[id*='motivation' i]",
                     "textarea[placeholder*='cover letter' i]",
                 ], cover_letter)
+
+            # 5. Autoclick general consent checkboxes
+            try:
+                consent_selectors = [
+                    "input[type='checkbox'][name*='privacy' i]",
+                    "input[type='checkbox'][name*='consent' i]",
+                    "input[type='checkbox'][name*='terms' i]",
+                    "input[type='checkbox'][id*='privacy' i]",
+                    "input[type='checkbox'][id*='consent' i]",
+                    "input[type='checkbox'][id*='agree' i]",
+                    "input[type='checkbox'][value*='agree' i]",
+                ]
+                for sel in consent_selectors:
+                    for el in self.driver.find_elements(By.CSS_SELECTOR, sel):
+                        if el.is_displayed() and not el.is_selected():
+                            self.driver.execute_script("arguments[0].click();", el)
+                            print(f"  [OK] Clicked consent checkbox: {sel}")
+            except Exception as ce:
+                print(f"  [WARN] Checkbox clicking error: {ce}")
+
+            # 6. Auto-resolving dropdown select questions (Sponsorship, Auth)
+            try:
+                select_elements = self.driver.find_elements(By.CSS_SELECTOR, "select")
+                for sel in select_elements:
+                    if not sel.is_displayed():
+                        continue
+                    aria = (sel.get_attribute("aria-label") or "").lower()
+                    name = (sel.get_attribute("name") or "").lower()
+                    text_content = (sel.text or "").lower()
+                    
+                    is_sponsorship = any(k in aria or k in name or k in text_content for k in ("sponsor", "visa", "sponsorship"))
+                    is_auth = any(k in aria or k in name or k in text_content for k in ("authorized", "legally", "permit"))
+
+                    from selenium.webdriver.support.ui import Select as SelObject
+                    sel_obj = SelObject(sel)
+                    
+                    if is_sponsorship:
+                        # Auto select "No" to sponsorship questions
+                        for opt in sel_obj.options:
+                            opt_text = (opt.text or "").lower()
+                            if opt_text.strip() in ("no", "false", "n"):
+                                sel_obj.select_by_visible_text(opt.text)
+                                print(f"  [OK] Sponsorship dropdown auto-filled: {opt.text}")
+                                break
+                    elif is_auth:
+                        # Auto select "Yes" to work authorization questions
+                        for opt in sel_obj.options:
+                            opt_text = (opt.text or "").lower()
+                            if opt_text.strip() in ("yes", "true", "y"):
+                                sel_obj.select_by_visible_text(opt.text)
+                                print(f"  [OK] Work Auth dropdown auto-filled: {opt.text}")
+                                break
+            except Exception as se:
+                print(f"  [WARN] Dropdown auto-filling error: {se}")
 
             print("  [OK] Form auto-fill completed")
             return True
@@ -389,10 +533,22 @@ class SequentialApplier:
                 })
 
             log_application(job_id, job_title, company, JobStatus.TAILORED)
-            cv_filepath = _generate_cv_text_file(tailored_cv, job_id)
+            
+            # Prioritize the originally uploaded high-quality PDF/DOCX resume
+            original_resume_path = _get_latest_uploaded_resume()
+            if original_resume_path:
+                cv_filepath = original_resume_path
+                print(f"Using high-quality original resume for upload: {os.path.basename(cv_filepath)}")
+            else:
+                cv_filepath = _generate_cv_text_file(tailored_cv, job_id)
+                print(f"Fallback to text tailored resume: {os.path.basename(cv_filepath)}")
 
             self.init_browser()
             self.wait_for_cloudflare_on_url(job_url)
+
+            # Record window handles to manage external redirections/new tabs
+            original_handles = self.driver.window_handles
+            main_handle = self.driver.current_window_handle
 
             # ── Route by job source ───────────────────────────────────────────
             if job_source == 'linkedin' or 'linkedin.com' in job_url.lower():
@@ -405,8 +561,17 @@ class SequentialApplier:
                     cv_filepath=cv_filepath,
                 )
                 if result == 'external':
-                    # LinkedIn job redirects to external site — use generic filler
+                    # LinkedIn job redirects to external site — wait and switch to newly opened tab if any
                     print(f"[Generic Filler] LinkedIn external apply for: {job_title}")
+                    time.sleep(3.5)
+                    new_handles = self.driver.window_handles
+                    if len(new_handles) > len(original_handles):
+                        new_tab = [h for h in new_handles if h not in original_handles][-1]
+                        self.driver.switch_to.window(new_tab)
+                        print("  Switched to new tab/window for external application.")
+                    else:
+                        print("  No new tab detected, continuing in current tab.")
+                    
                     self.wait_for_cloudflare()
                     self.fill_form(tailored_cv, cover_letter, cv_filepath)
                 elif result == 'already_applied':
@@ -426,6 +591,15 @@ class SequentialApplier:
                 result = agent.run(job_url)
                 if result == 'external_redirect':
                     print(f"[Generic Filler] Indeed external apply for: {job_title}")
+                    time.sleep(3.5)
+                    new_handles = self.driver.window_handles
+                    if len(new_handles) > len(original_handles):
+                        new_tab = [h for h in new_handles if h not in original_handles][-1]
+                        self.driver.switch_to.window(new_tab)
+                        print("  Switched to new tab/window for external Indeed redirect.")
+                    else:
+                        print("  No new tab detected, continuing in current tab.")
+                    
                     self.wait_for_cloudflare()
                     self.fill_form(tailored_cv, cover_letter, cv_filepath)
                 elif result == 'failed':
@@ -459,20 +633,27 @@ class SequentialApplier:
             if skip_event.is_set():
                 print(f"Skipped: {job_title}")
                 log_application(job_id, job_title, company, JobStatus.FAILED, "User skipped during review")
+                # Clean up secondary window handles and return to primary
+                try:
+                    current_handle = self.driver.current_window_handle
+                    if len(self.driver.window_handles) > 1 and current_handle != original_handles[0]:
+                        self.driver.close()
+                        self.driver.switch_to.window(original_handles[0])
+                except Exception:
+                    pass
                 return False
 
             log_application(job_id, job_title, company, JobStatus.SUBMITTED)
             print(f"[OK] Submitted: {job_title}")
 
-            # Clean up: close tab and open blank to keep browser alive for next job
+            # Clean up: close secondary tabs and return to primary handle
             try:
-                self.driver.close()
-            except Exception:
-                pass
-            try:
-                if not self.driver.window_handles:
-                    self.driver.execute_script("window.open('');")
-                self.driver.switch_to.window(self.driver.window_handles[-1])
+                current_handle = self.driver.current_window_handle
+                if len(self.driver.window_handles) > 1 and current_handle != original_handles[0]:
+                    self.driver.close()
+                    self.driver.switch_to.window(original_handles[0])
+                else:
+                    self.driver.get("about:blank")
             except Exception:
                 pass
 

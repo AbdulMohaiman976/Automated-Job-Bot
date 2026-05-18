@@ -41,6 +41,11 @@ interface Summary {
   total_discovered: number;
   total_deduplicated: number;
   by_source: Record<string, number>;
+  last_scan_time?: string;
+  groq_api_usage?: number;
+  tailored?: number;
+  ready?: number;
+  submitted?: number;
 }
 
 interface AppStatus {
@@ -87,10 +92,20 @@ const App: React.FC = () => {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [overviewMode, setOverviewMode] = useState<'all' | 'unique'>('unique');
+  const [overviewMode, setOverviewMode] = useState<'all' | 'unique' | 'pipeline'>('unique');
   const [waitingForReviewCompletion, setWaitingForReviewCompletion] = useState(false);
   const [expandedAppliedJobId, setExpandedAppliedJobId] = useState<string | null>(null);
   const [cvVersion, setCvVersion] = useState(0);
+  const [showBlueAlert, setShowBlueAlert] = useState<string | null>(null);
+
+  const formatPST = (isoString?: string) => {
+    if (!isoString) return 'Never';
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Karachi',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date(isoString)) + ' PST';
+  };
 
   const fetchData = async () => {
     try {
@@ -176,10 +191,19 @@ const App: React.FC = () => {
       null;
   }, [selectedJobId, allJobs, jobs]);
 
-  const overviewJobs = (overviewMode === 'all' ? allJobs : jobs).filter((job) =>
-    job.job_title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    job.company.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const overviewJobs = useMemo(() => {
+    let filtered = (overviewMode === 'all' ? allJobs : jobs);
+    
+    if (overviewMode === 'pipeline') {
+      // In pipeline mode, show jobs that are tailored or ready but not yet submitted
+      filtered = allJobs.filter(j => j.status === 'tailored' || j.status === 'ready');
+    }
+
+    return filtered.filter((job) =>
+      job.job_title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      job.company.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [overviewMode, allJobs, jobs, searchTerm]);
 
   const readyToApplyCount = Math.max((summary?.total_discovered || 0) - (summary?.total_deduplicated || 0), 0);
   const appliedCount = appliedJobs.length;
@@ -206,6 +230,46 @@ const App: React.FC = () => {
     } catch (e) {
       console.error('Failed to clear CV', e);
     }
+  };
+
+  const normalizeSkills = (skillsData: any): string[] => {
+    if (!skillsData) return [];
+    if (Array.isArray(skillsData)) {
+      return skillsData.map(s => {
+        if (typeof s === 'string') return s;
+        if (typeof s === 'object' && s !== null) {
+          if (s.technologies && Array.isArray(s.technologies)) {
+            return `${s.category}: ${s.technologies.join(', ')}`;
+          }
+          return JSON.stringify(s);
+        }
+        return String(s);
+      });
+    }
+    if (typeof skillsData === 'object' && skillsData !== null) {
+      return Object.entries(skillsData).map(([key, val]) => {
+        if (Array.isArray(val)) return `${key}: ${val.join(', ')}`;
+        return `${key}: ${val}`;
+      });
+    }
+    return [];
+  };
+
+  const normalizeLinks = (linksData: any): [string, string][] => {
+    if (!linksData) return [];
+    if (typeof linksData === 'object' && !Array.isArray(linksData)) {
+      return Object.entries(linksData)
+        .filter(([_, url]) => url && typeof url === 'string')
+        .map(([name, url]) => [name, url as string]);
+    }
+    if (Array.isArray(linksData)) {
+      return linksData.map(l => {
+        if (Array.isArray(l) && l.length === 2) return [String(l[0]), String(l[1])];
+        if (typeof l === 'string') return [l, l];
+        return ['Link', JSON.stringify(l)];
+      });
+    }
+    return [];
   };
 
   const handleGenerateTailoredDocs = async () => {
@@ -239,11 +303,13 @@ const App: React.FC = () => {
       return;
     }
     if (!profile) {
-      alert('Upload CV first.');
+      setShowBlueAlert('Please upload CV first.');
+      setTimeout(() => setShowBlueAlert(null), 4000);
       return;
     }
     if (!tailoredPreview) {
-      alert('Generate tailored CV and cover letter first.');
+      setShowBlueAlert('Please generate tailored CV and cover letter first.');
+      setTimeout(() => setShowBlueAlert(null), 4000);
       return;
     }
     try {
@@ -311,27 +377,27 @@ const App: React.FC = () => {
 
   const renderTailoredResume = (cv: any) => {
     if (!cv || typeof cv !== 'object') return null;
-    const skills: string[] = Array.isArray(cv.skills) ? cv.skills : [];
+    const skills = normalizeSkills(cv.skills);
     const experience: any[] = Array.isArray(cv.experience) ? cv.experience : [];
     const education: any[] = Array.isArray(cv.education) ? cv.education : [];
     const projects: any[] = Array.isArray(cv.projects) ? cv.projects : [];
     const certifications: any[] = Array.isArray(cv.certifications) ? cv.certifications : typeof cv.certifications === 'string' ? [cv.certifications] : [];
-    const links: string[] = Array.isArray(cv.links) ? cv.links : [];
+    const links = normalizeLinks(cv.links);
 
     return (
       <div className="tailored-resume">
         <div className="resume-header-block">
-          <h3 className="resume-name">{cv.full_name || 'Candidate'}</h3>
+          <h3 className="resume-name">{String(cv.full_name || 'Candidate')}</h3>
           <div className="resume-contact-row">
-            {cv.email && <span>✉ {cv.email}</span>}
-            {cv.phone && <span>☎ {cv.phone}</span>}
-            {cv.location && <span><MapPin size={13} /> {cv.location}</span>}
+            {cv.email && <span>✉ {String(cv.email)}</span>}
+            {cv.phone && <span>☎ {String(cv.phone)}</span>}
+            {cv.location && <span><MapPin size={13} /> {String(cv.location)}</span>}
           </div>
           {links.length > 0 && (
             <div className="resume-contact-row">
-              {links.map((link: string, i: number) => (
-                <a key={i} href={link} target="_blank" rel="noopener noreferrer" className="resume-link">
-                  {link.includes('linkedin') ? '🔗 LinkedIn' : link.includes('github') ? '🔗 GitHub' : '🔗 Portfolio'}
+              {links.map(([name, url], i) => (
+                <a key={i} href={url.startsWith('http') ? url : `https://${url}`} target="_blank" rel="noopener noreferrer" className="resume-link">
+                  {name.toLowerCase().includes('linkedin') ? '🔗 LinkedIn' : name.toLowerCase().includes('github') ? '🔗 GitHub' : `🔗 ${name}`}
                 </a>
               ))}
             </div>
@@ -341,14 +407,14 @@ const App: React.FC = () => {
         {cv.summary && (
           <div className="resume-section-block">
             <h4><Briefcase size={15} /> Professional Summary</h4>
-            <p>{cv.summary}</p>
+            <p>{String(cv.summary)}</p>
           </div>
         )}
 
         {skills.length > 0 && (
           <div className="resume-section-block">
             <h4><Code2 size={15} /> Technical Skills</h4>
-            <div className="tag-cloud">{skills.map((s: string) => <span key={s} className="badge">{s}</span>)}</div>
+            <div className="tag-cloud">{skills.map((s: string, i: number) => <span key={i} className="badge">{s}</span>)}</div>
           </div>
         )}
 
@@ -360,10 +426,10 @@ const App: React.FC = () => {
               return (
                 <div key={i} className="resume-entry">
                   <div className="entry-top-row">
-                    <strong>{exp.role || exp.title || exp.job_title || exp.position || 'Role'}</strong>
-                    <span className="entry-duration">{exp.duration || exp.dates || exp.period || ''}</span>
+                    <strong>{String(exp.role || exp.title || exp.job_title || exp.position || 'Role')}</strong>
+                    <span className="entry-duration">{String(exp.duration || exp.dates || exp.period || '')}</span>
                   </div>
-                  <div className="entry-org">{exp.company || exp.organization || ''}</div>
+                  <div className="entry-org">{String(exp.company || exp.organization || '')}</div>
                   {bullets.length > 0 && <ul className="entry-bullets">{bullets.map((b: string, j: number) => <li key={j}>{b}</li>)}</ul>}
                 </div>
               );
@@ -377,10 +443,10 @@ const App: React.FC = () => {
             {education.map((edu: any, i: number) => (
               <div key={i} className="resume-entry">
                 <div className="entry-top-row">
-                  <strong>{edu.degree || edu.title || edu.program || 'Degree'}</strong>
-                  <span className="entry-duration">{edu.year || edu.duration || edu.dates || ''}</span>
+                  <strong>{String(edu.degree || edu.title || edu.program || 'Degree')}</strong>
+                  <span className="entry-duration">{String(edu.year || edu.duration || edu.dates || '')}</span>
                 </div>
-                <div className="entry-org">{edu.institution || edu.school || edu.university || ''}</div>
+                <div className="entry-org">{String(edu.institution || edu.school || edu.university || '')}</div>
               </div>
             ))}
           </div>
@@ -393,7 +459,7 @@ const App: React.FC = () => {
               const bullets = normalizeBullets(proj.description);
               return (
                 <div key={i} className="resume-entry">
-                  <strong>{proj.title || proj.name || 'Project'}</strong>
+                  <strong>{String(proj.title || proj.name || 'Project')}</strong>
                   {bullets.length > 0 && <ul className="entry-bullets">{bullets.map((b: string, j: number) => <li key={j}>{b}</li>)}</ul>}
                 </div>
               );
@@ -457,6 +523,12 @@ const App: React.FC = () => {
             <h1>Job Bot <span className="text-gradient">Pro</span></h1>
             <p>Automated Data Engineering Career Agent</p>
           </div>
+          {summary?.groq_api_usage !== undefined && (
+            <div className="api-usage-badge ml-4">
+              <Sparkles size={14} />
+              <span>Groq Calls: {summary.groq_api_usage}</span>
+            </div>
+          )}
         </div>
 
         <div className="header-actions">
@@ -476,7 +548,7 @@ const App: React.FC = () => {
           <div className="scan-status-header">
             <div>
               <h3>{discoveryRunning ? 'Discovery running' : 'Last discovery run'}</h3>
-              <p>{discoveryMessage || (discoveryRunning ? 'Fetching jobs from Apify actors.' : 'No active scan.')}</p>
+              <p>{discoveryMessage || (discoveryRunning ? 'Fetching jobs from Apify actors.' : `Last successful run: ${formatPST(summary?.last_scan_time)}`)}</p>
             </div>
             <span className={`scan-status-pill ${discoveryRunning ? 'live' : 'idle'}`}>
               {discoveryRunning ? 'Live' : 'Idle'}
@@ -508,6 +580,7 @@ const App: React.FC = () => {
                 <div className="source-breakdown mt-2 text-sm text-muted">
                   <div className="flex justify-between"><span>LinkedIn:</span> <span>{summary?.by_source?.LinkedIn || summary?.by_source?.linkedin || 0}</span></div>
                   <div className="flex justify-between"><span>Indeed:</span> <span>{summary?.by_source?.Indeed || summary?.by_source?.indeed || 0}</span></div>
+                  <div className="flex justify-between"><span>Dice:</span> <span>{summary?.by_source?.Dice || summary?.by_source?.dice || 0}</span></div>
                 </div>
               </div>
 
@@ -519,12 +592,12 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="stat-card border-warning-subtle">
-                <div className="stat-label">Ready to Apply</div>
-                <div className="stat-value text-warning">{readyToApplyCount}</div>
+              <div className={`stat-card border-warning-subtle cursor-pointer ${overviewMode === 'pipeline' ? 'active-pipeline' : ''}`} onClick={() => setOverviewMode('pipeline')}>
+                <div className="stat-label">Application Pipeline</div>
+                <div className="stat-value text-warning">{summary?.tailored || 0}</div>
                 <div className="source-breakdown mt-2 text-sm text-muted">
-                  <p>Ready to apply</p>
-                  <p>Applied so far: {appliedCount}</p>
+                  <p>Tailored & Ready: {summary?.tailored || 0}</p>
+                  <p>Successfully Applied: {appliedCount}</p>
                 </div>
               </div>
             </div>
@@ -532,11 +605,16 @@ const App: React.FC = () => {
             <div className="overview-jobs-section">
               <div className="overview-jobs-header">
                 <div>
-                  <h3>{overviewMode === 'all' ? 'All Discovered Jobs' : 'Unique Jobs'}</h3>
+                  <h3>
+                    {overviewMode === 'all' ? 'All Discovered Jobs' : 
+                     overviewMode === 'unique' ? 'Unique Jobs' : 'Tailored Pipeline'}
+                  </h3>
                   <p>
                     {overviewMode === 'all'
                       ? 'Showing every discovered role from the latest scan.'
-                      : 'Showing the deduplicated set after duplicate removal.'}
+                      : overviewMode === 'unique'
+                      ? 'Showing the deduplicated set after duplicate removal.'
+                      : 'Showing jobs that are tailored and ready for application.'}
                   </p>
                 </div>
                 <span className="badge badge-warning">{overviewJobs.length} Jobs</span>
@@ -622,7 +700,7 @@ const App: React.FC = () => {
                   <div className="list-header">
                     <div>
                       <h3 style={{ fontSize: '1.15rem' }}>Selected Job</h3>
-                      <p style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.25rem' }}>{selectedJob.job_title} at {selectedJob.company}</p>
+                      <p style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.25rem' }}>{String(selectedJob.job_title)} at {String(selectedJob.company)}</p>
                     </div>
                     <a href={selectedJob.url} target="_blank" rel="noopener noreferrer" className="btn-small">
                       <ExternalLink size={14} /> View Job
@@ -633,6 +711,18 @@ const App: React.FC = () => {
                     <span><Clock size={14} /> {selectedJob.posted_date}</span>
                   </div>
                 </div>
+
+                {/* Blue Alert Popup */}
+                {showBlueAlert && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -20 }} 
+                    animate={{ opacity: 1, y: 0 }}
+                    className="alert-banner-blue mb-4"
+                  >
+                    <Loader2 className="spin" size={18} />
+                    {showBlueAlert}
+                  </motion.div>
+                )}
 
                 {/* Step 1: Upload CV */}
                 <div className="upload-section mb-4">
@@ -657,9 +747,9 @@ const App: React.FC = () => {
                     <div className="view-card">
                       <h4>Parsed Profile</h4>
                       <div className="parsed-data">
-                        <div className="data-group"><label>Full Name</label><div>{profile.full_name}</div></div>
-                        <div className="data-group"><label>Summary</label><p>{profile.summary}</p></div>
-                        <div className="data-group"><label>Key Skills</label><div className="tag-cloud">{profile.skills?.map((s: string) => <span key={s} className="badge">{s}</span>)}</div></div>
+                        <div className="data-group"><label>Full Name</label><div>{String(profile.full_name)}</div></div>
+                        <div className="data-group"><label>Summary</label><p>{String(profile.summary)}</p></div>
+                        <div className="data-group"><label>Key Skills</label><div className="tag-cloud">{normalizeSkills(profile.skills).map((s: string, i: number) => <span key={i} className="badge">{s}</span>)}</div></div>
                       </div>
                     </div>
                   </div>

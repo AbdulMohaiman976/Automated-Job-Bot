@@ -18,6 +18,13 @@ if sys.platform == "win32":
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    
+    # Fix for asyncio 'WinError 10054' crash on Windows with ProactorEventLoop
+    import asyncio
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except AttributeError:
+        pass
 
 from src.workflow.discover import run_discovery
 from src.utils.cv_processor import process_cv
@@ -200,15 +207,23 @@ async def get_stats():
 
 @app.get("/summary")
 async def get_summary():
+    # Get latest static summary
     files = glob(os.path.join(DATA_DIR, "summary-*.json"))
-    if not files:
-        return {}
-    files.sort(reverse=True)
-    try:
-        with open(files[0], "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    summary_data = {}
+    if files:
+        files.sort(reverse=True)
+        try:
+            with open(files[0], "r", encoding="utf-8") as f:
+                summary_data = json.load(f)
+        except:
+            pass
+            
+    # Get dynamic stats from tracker
+    from src.storage.tracker import get_dashboard_stats
+    tracker_stats = get_dashboard_stats()
+    
+    # Merge
+    return {**summary_data, **tracker_stats}
 
 
 @app.get("/health")
@@ -233,6 +248,8 @@ def run_discovery_task():
             run_discovery()
         discovery_status["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         discovery_status["last_message"] = "Discovery complete"
+        from src.storage.tracker import save_last_scan_time
+        save_last_scan_time()
     except Exception as e:
         discovery_status["error"] = str(e)
         discovery_status["last_message"] = f"Discovery failed: {e}"
@@ -263,8 +280,12 @@ async def get_discovery_logs(limit: int = 25):
     if not os.path.exists(DISCOVERY_LOG_FILE):
         return {"lines": []}
 
-    with open(DISCOVERY_LOG_FILE, "r", encoding="utf-8") as f:
-        lines = f.read().splitlines()
+    try:
+        with open(DISCOVERY_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        # Ignore transient read locks or errors
+        return {"lines": []}
 
     return {"lines": lines[-max(1, min(limit, 200)) :]}
 
@@ -377,6 +398,11 @@ def tailor_job(job_id: str):
         
         payload = {"cv": t_cv, "cv_latex": t_latex, "cover_letter": t_cl}
         save_tailored_application(job_id, payload)
+        
+        # Log to tracker
+        from src.storage.tracker import log_application, JobStatus
+        log_application(job_id, job.get('job_title', 'Unknown'), job.get('company', 'Unknown'), JobStatus.TAILORED)
+        
         print(f"[OK] Tailoring complete for: {job_id}")
         return {"message": "Job tailored successfully", "job_id": job_id, "tailored": payload}
     except Exception as e:

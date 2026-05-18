@@ -25,6 +25,7 @@ from langchain_core.messages import HumanMessage
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
 from selenium.common.exceptions import ElementClickInterceptedException
+from selenium.webdriver.common.keys import Keys
 
 from src.config import CANDIDATE_EMAIL, GROQ_API_KEY
 
@@ -47,17 +48,31 @@ class LinkedInState(TypedDict):
 # ── Low-level Selenium helpers ────────────────────────────────────────────────
 
 def _find(driver, selectors: list, timeout: float = 6):
-    """Return first visible element matching any selector, or None."""
+    """Return first visible element matching any selector (CSS or XPath), or None."""
     deadline = time.time() + timeout
+    print(f"  [DEBUG] Searching for selectors: {selectors}")
     while time.time() < deadline:
         for sel in selectors:
             try:
-                for el in driver.find_elements(By.CSS_SELECTOR, sel):
-                    if el.is_displayed():
-                        return el
-            except Exception:
-                pass
+                by_type = By.XPATH if sel.startswith("/") or sel.startswith("xpath:") else By.CSS_SELECTOR
+                actual_sel = sel[6:] if sel.startswith("xpath:") else sel
+                elements = driver.find_elements(by_type, actual_sel)
+                if elements:
+                    print(f"  [DEBUG] Selector '{sel}' matched {len(elements)} elements.")
+                    for i, el in enumerate(elements):
+                        try:
+                            disp = el.is_displayed()
+                            enabled = el.is_enabled()
+                            text = el.text[:50].replace("\n", " ") if disp else ""
+                            print(f"    - Element {i}: displayed={disp}, enabled={enabled}, text='{text}'")
+                            if disp:
+                                return el
+                        except Exception as ee:
+                            print(f"    - Element {i} error: {ee}")
+            except Exception as e:
+                print(f"  [DEBUG] Error checking selector '{sel}': {e}")
         time.sleep(0.35)
+    print("  [DEBUG] No visible element found for any selector.")
     return None
 
 
@@ -69,10 +84,67 @@ def _safe_fill(driver, el, value: str) -> bool:
             el.click()
         except Exception:
             pass
-        driver.execute_script("arguments[0].value = '';", el)
+        # Clear field using backspace simulation to trigger React/SPA state updates reliably
+        try:
+            el.send_keys(Keys.CONTROL + "a")
+            el.send_keys(Keys.BACKSPACE)
+        except Exception:
+            driver.execute_script("arguments[0].value = '';", el)
+        time.sleep(0.1)
         el.send_keys(str(value))
         return True
     except Exception:
+        return False
+
+
+def _fill_location_typeahead(driver, el, location_val: str) -> bool:
+    """Type city name, wait for LinkedIn autocomplete typeahead, and select first option."""
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        time.sleep(0.2)
+        el.click()
+        time.sleep(0.1)
+        
+        # Clear field using backspace simulation to trigger React state updates
+        el.send_keys(Keys.CONTROL + "a")
+        el.send_keys(Keys.BACKSPACE)
+        time.sleep(0.2)
+        
+        # Type the first part of the location (e.g. "Islamabad" instead of full "Islamabad, Pakistan")
+        # because typeaheads prefer cities without full suffixes to trigger search results
+        search_part = location_val.split(",")[0].strip()
+        el.send_keys(search_part)
+        print(f"    Typed location search: '{search_part}'")
+        time.sleep(1.5)  # Wait for results to render
+        
+        # Look for autocomplete options
+        option_selectors = [
+            "div[role='option']",
+            "li[role='option']",
+            ".artdeco-typeahead__result",
+            ".artdeco-typeahead__results li",
+            "ul.artdeco-typeahead__results li"
+        ]
+        
+        for sel in option_selectors:
+            options = driver.find_elements(By.CSS_SELECTOR, sel)
+            for opt in options:
+                if opt.is_displayed():
+                    opt_text = opt.text.replace("\n", " ")
+                    print(f"    [OK] Selecting location option: '{opt_text}'")
+                    driver.execute_script("arguments[0].click();", opt)
+                    time.sleep(1)
+                    return True
+                    
+        # If option selectors didn't match, try pressing Enter or Down + Enter as fallback
+        print("    [WARN] Autocomplete dropdown selector not matched, attempting Keys.DOWN + Keys.ENTER fallback...")
+        el.send_keys(Keys.DOWN)
+        time.sleep(0.3)
+        el.send_keys(Keys.ENTER)
+        time.sleep(1)
+        return True
+    except Exception as e:
+        print(f"    [WARN] Location typeahead error: {e}")
         return False
 
 
@@ -85,7 +157,12 @@ def _fill_any(driver, selectors: list, value: str, skip_if_filled=True) -> bool:
                     continue
                 if skip_if_filled and (el.get_attribute("value") or "").strip():
                     continue
-                if _safe_fill(driver, el, value):
+                # If it's a city or location field, handle autocomplete typeahead
+                is_loc = any(k in sel.lower() or k in (el.get_attribute("id") or "").lower() or k in (el.get_attribute("name") or "").lower() for k in ("city", "location"))
+                if is_loc:
+                    if _fill_location_typeahead(driver, el, value):
+                        return True
+                elif _safe_fill(driver, el, value):
                     return True
         except Exception:
             pass
@@ -95,6 +172,7 @@ def _fill_any(driver, selectors: list, value: str, skip_if_filled=True) -> bool:
 def _click(driver, selectors: list, label: str = "", timeout: float = 8) -> bool:
     el = _find(driver, selectors, timeout)
     if not el:
+        print(f"  [DEBUG] Click aborted: Selector not found for: {label}")
         return False
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
@@ -104,14 +182,19 @@ def _click(driver, selectors: list, label: str = "", timeout: float = 8) -> bool
             print(f"    [OK] Clicked: {label}")
         time.sleep(1.5)
         return True
-    except ElementClickInterceptedException:
+    except ElementClickInterceptedException as ec:
+        print(f"  [DEBUG] Click intercepted for '{label}': {ec}. Retrying via execute_script...")
         try:
             driver.execute_script("arguments[0].click();", el)
+            if label:
+                print(f"    [OK] Clicked (stealth retry) for: {label}")
             time.sleep(1.5)
             return True
-        except Exception:
+        except Exception as e2:
+            print(f"  [DEBUG] Stealth retry click failed for '{label}': {e2}")
             return False
-    except Exception:
+    except Exception as e:
+        print(f"  [DEBUG] Click failed for '{label}' with exception: {e}")
         return False
 
 
@@ -194,7 +277,25 @@ def _modal_fields(driver) -> list:
 
 def _is_login_wall(driver) -> bool:
     try:
+        # Check if we are already logged in via prominent navbar or profile indicators
+        logged_in_selectors = [
+            ".global-nav",
+            ".global-nav__me-photo",
+            ".global-nav__me-menu-trigger",
+            "#global-nav-typeahead",
+            "a[href*='/in/']"
+        ]
+        for sel in logged_in_selectors:
+            try:
+                for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                    if el.is_displayed():
+                        print(f"  [DEBUG] Logged-in indicator found: {sel}")
+                        return False
+            except Exception:
+                pass
+
         url = driver.current_url.lower()
+        print(f"  [DEBUG] Login check URL: {url}")
         if any(k in url for k in ("login", "signin", "sign-in", "authwall", "checkpoint", "uas/oauth")):
             return True
         # Treat Google OAuth page as still-in-login (user may have clicked "Continue with Google")
@@ -393,6 +494,7 @@ def node_wait_login(state: LinkedInState) -> dict:
 
 def node_click_easy_apply(state: LinkedInState) -> dict:
     driver = state["driver"]
+    print("  [LinkedIn Agent] Running node_click_easy_apply...")
 
     easy_apply_selectors = [
         "button.jobs-apply-button",
@@ -400,6 +502,10 @@ def node_click_easy_apply(state: LinkedInState) -> dict:
         ".jobs-apply-button--top-card",
         ".jobs-unified-top-card__content button.artdeco-button--primary",
         "button[data-control-name='jobdetails_topcard_inapply']",
+        "xpath://button[contains(., 'Easy Apply')]",
+        "xpath://span[contains(text(), 'Easy Apply')]/ancestor::button",
+        "xpath://button[contains(@aria-label, 'Easy Apply')]",
+        "xpath://span[contains(text(), 'Easy Apply')]"
     ]
 
     clicked = _click(driver, easy_apply_selectors, "Easy Apply button", timeout=10)
@@ -407,12 +513,23 @@ def node_click_easy_apply(state: LinkedInState) -> dict:
     if not clicked:
         # Check if it's a regular (non-Easy-Apply) external link
         external_selectors = [
+            "a.jobs-apply-button",
             "button[aria-label*='Apply' i]:not([aria-label*='Easy' i])",
             "a[data-control-name='jobdetails_topcard_inapply']",
+            ".jobs-unified-top-card__content a.artdeco-button--primary",
+            "a[aria-label*='Apply' i]:not([aria-label*='Easy' i])",
+            "xpath://a[contains(., 'Apply')]",
+            "xpath://span[contains(text(), 'Apply')]/ancestor::a",
+            "xpath://span[contains(text(), 'Apply')]/ancestor::button"
         ]
-        if _find(driver, external_selectors, timeout=3):
-            print("  -> External apply button found (not Easy Apply) — falling back to generic filler")
-            return {"result": "external"}
+        
+        el = _find(driver, external_selectors, timeout=4)
+        if el:
+            print("  -> External apply button found (not Easy Apply) — clicking it to open portal!")
+            clicked_ext = _click(driver, external_selectors, "External Apply button", timeout=5)
+            if clicked_ext:
+                time.sleep(2)
+                return {"result": "external"}
 
         # Check if already applied
         try:
@@ -445,9 +562,42 @@ def node_fill_step(state: LinkedInState) -> dict:
 
     print(f"  -> Filling modal step {state['step_count'] + 1}")
 
-    # ── 1. Contact info (deterministic) ───────────────────────────────────────
+    # ── 1. Contact info (deterministic, force-overwrite LinkedIn prefill) ─────
+    full_name = cv.get("full_name") or cv.get("name") or ""
+    first_name = ""
+    last_name = ""
+    if full_name:
+        parts = full_name.split()
+        if len(parts) > 1:
+            first_name = parts[0]
+            last_name = " ".join(parts[1:])
+        else:
+            first_name = full_name
+
+    email = cv.get("email", "")
     phone = cv.get("phone", "")
     location = cv.get("location", "")
+
+    if first_name:
+        _fill_any(driver, [
+            "input[id*='firstName' i]",
+            "input[name*='firstName' i]",
+            "input[placeholder*='First Name' i]",
+        ], first_name, skip_if_filled=False)
+
+    if last_name:
+        _fill_any(driver, [
+            "input[id*='lastName' i]",
+            "input[name*='lastName' i]",
+            "input[placeholder*='Last Name' i]",
+        ], last_name, skip_if_filled=False)
+
+    if email:
+        _fill_any(driver, [
+            "input[id*='email' i]",
+            "input[name*='email' i]",
+            "input[placeholder*='Email' i]",
+        ], email, skip_if_filled=False)
 
     if phone:
         _fill_any(driver, [
@@ -455,7 +605,7 @@ def node_fill_step(state: LinkedInState) -> dict:
             "input[id*='phoneNumber' i]",
             "input[name*='phoneNumber' i]",
             "input[type='tel']",
-        ], phone)
+        ], phone, skip_if_filled=False)
 
     if location:
         _fill_any(driver, [
@@ -463,7 +613,7 @@ def node_fill_step(state: LinkedInState) -> dict:
             "input[id*='location' i]",
             "input[placeholder*='city' i]",
             "input[placeholder*='location' i]",
-        ], location)
+        ], location, skip_if_filled=False)
 
     # ── 2. Resume upload ───────────────────────────────────────────────────────
     cv_filepath = state.get("cv_filepath", "")
@@ -538,6 +688,10 @@ def node_advance(state: LinkedInState) -> dict:
         "button[aria-label*='next step' i]",
         "button[aria-label='Review your application']",
         "button[data-easy-apply-next-button]",
+        "xpath://button[contains(., 'Next')]",
+        "xpath://button[contains(span/text(), 'Next')]",
+        "xpath://button[contains(., 'Review')]",
+        "xpath://button[contains(span/text(), 'Review')]"
     ]
 
     clicked = _click(driver, next_selectors, "Next step", timeout=5)
@@ -560,11 +714,8 @@ def node_advance(state: LinkedInState) -> dict:
         except Exception:
             pass
 
-    if clicked:
-        return {"step_count": state["step_count"] + 1}
-
-    # Could not advance — might already be on review
-    return {}
+    # Increment step_count by 1 to avoid infinite loop locks
+    return {"step_count": state["step_count"] + 1}
 
 
 def node_review(state: LinkedInState) -> dict:

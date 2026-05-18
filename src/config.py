@@ -44,6 +44,7 @@ APIFY_TIMEOUT_SECONDS = int(os.getenv("APIFY_TIMEOUT_SECONDS", 300))
 APIFY_MAX_CONCURRENCY = int(os.getenv("APIFY_MAX_CONCURRENCY", 5))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+DICE_ACTOR_ID = os.getenv("DICE_ACTOR_ID", "lexis-solutions/dice-com-jobs-scraper")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

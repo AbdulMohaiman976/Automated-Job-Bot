@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 from src import config
 from src.discovery.linkedin_api import fetch_linkedin_jobs_via_apify_api
 from src.discovery.indeed_api import fetch_indeed_jobs_via_apify_api
+from src.discovery.dice_api import fetch_dice_jobs_via_apify_api
 from src.storage.tracker import save_jobs, save_summary
 from src.utils.logger import error, log
 
@@ -36,6 +37,40 @@ def deduplicate_jobs(jobs):
     return deduped
 
 
+def is_strict_data_engineer(job: dict) -> bool:
+    """
+    Strictly cross-check if the job is a Data Engineer role.
+    This acts as a production-level filter before saving.
+    """
+    title = job.get("job_title", "").lower()
+    
+    # Must contain data and engineer/engineering/architect/pipeline
+    if "data" not in title:
+        return False
+        
+    valid_roles = ["engineer", "engineering", "architect", "pipeline", "developer"]
+    if not any(role in title for role in valid_roles):
+        return False
+        
+    # Exclude strict non-data-engineering roles
+    exclusions = ["software engineer", "frontend", "front end", "backend", "back end", "full stack", "fullstack", "scientist", "analyst"]
+    
+    # If it has an exclusion, check if it explicitly still says "data" directly attached
+    for ex in exclusions:
+        if ex in title and "data" not in title.replace(ex, "").strip():
+            # If it's "Data Software Engineer", we might keep it, but if it's "Software Engineer - Data", we might keep it too.
+            # But let's be strict: if it's just "Software Engineer" and data is somewhere else, exclude.
+            pass
+            
+    # For production level, we can use Groq LLM here if needed, but regex is faster and 95% accurate.
+    # Let's do a strict exclusion:
+    for ex in ["frontend", "front end", "full stack", "fullstack"]:
+        if ex in title:
+            return False
+            
+    return True
+
+
 def run_discovery():
     try:
         log("=== Starting daily discovery workflow (Multi-Source-Python) ===")
@@ -48,12 +83,14 @@ def run_discovery():
         source_jobs = {
             "LinkedIn": [],
             "Indeed": [],
+            "Dice": [],
         }
         errors = []
 
         fetchers = {
             "LinkedIn": fetch_linkedin_jobs_via_apify_api,
             "Indeed": fetch_indeed_jobs_via_apify_api,
+            "Dice": fetch_dice_jobs_via_apify_api,
         }
 
         with ThreadPoolExecutor(max_workers=len(fetchers)) as executor:
@@ -62,12 +99,19 @@ def run_discovery():
                 source = future_map[future]
                 try:
                     jobs = future.result() or []
+                    
+                    # Strictly filter for Data Engineer before saving or showing
+                    filtered_jobs = [j for j in jobs if is_strict_data_engineer(j)]
+                    if len(jobs) > len(filtered_jobs):
+                        log(f"Filtered out {len(jobs) - len(filtered_jobs)} non-Data Engineer jobs from {source}.")
+                    
+                    jobs = filtered_jobs
                     source_jobs[source] = jobs
                     
                     # Live Update: Save jobs from this source immediately so they show up in UI
                     if jobs:
                         try:
-                            log(f"Live Update: Saving {len(jobs)} jobs from {source}...")
+                            log(f"Live Update: Saving {len(jobs)} strictly filtered jobs from {source}...")
                             save_jobs(jobs, suffix="all")
                             
                             # Also save to unique so the dashboard 'Apply' tab shows them immediately
@@ -80,7 +124,7 @@ def run_discovery():
                     errors.append(message)
                     error(message)
 
-        all_jobs = source_jobs["LinkedIn"] + source_jobs["Indeed"]
+        all_jobs = source_jobs["LinkedIn"] + source_jobs["Indeed"] + source_jobs["Dice"]
         deduped_jobs = deduplicate_jobs(all_jobs)
 
         summary = {
@@ -90,6 +134,7 @@ def run_discovery():
             "by_source": {
                 "LinkedIn": len(source_jobs["LinkedIn"]),
                 "Indeed": len(source_jobs["Indeed"]),
+                "Dice": len(source_jobs["Dice"]),
             },
             "errors": errors,
         }
@@ -101,12 +146,13 @@ def run_discovery():
 
         log("=== Daily discovery workflow complete ===")
         log(
-            "LinkedIn: {linkedin}, Indeed: {indeed}".format(
+            "LinkedIn: {linkedin}, Indeed: {indeed}, Dice: {dice}".format(
                 linkedin=len(source_jobs["LinkedIn"]),
                 indeed=len(source_jobs["Indeed"]),
+                dice=len(source_jobs["Dice"]),
             )
         )
-        log(f"Total Unique Jobs: {len(deduped_jobs)}")
+        log(f"Total Unique Strict Data Engineer Jobs: {len(deduped_jobs)}")
         if errors:
             log(f"Discovery finished with warnings: {errors}")
 

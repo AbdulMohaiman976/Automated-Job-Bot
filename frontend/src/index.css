@@ -1404,3 +1404,36 @@ body {
     flex-direction: column;
   }
 }
+
+/* New UI Features */
+.api-usage-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.alert-banner-blue {
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid var(--primary);
+  color: var(--primary-strong);
+  padding: 1rem;
+  border-radius: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.1);
+}
+
+.stat-card.active-pipeline {
+  border-color: var(--warning) !important;
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.3) !important;
+  background: rgba(245, 158, 11, 0.05) !important;
+}

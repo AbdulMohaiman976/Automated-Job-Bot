@@ -11,6 +11,7 @@ UPLOADS_DIR = str(BASE_DIR / "data" / "uploads")
 PROFILES_DIR = str(BASE_DIR / "data" / "profiles")
 APPLICATIONS_DIR = str(BASE_DIR / "data" / "applications")
 TRACKER_FILE = str(BASE_DIR / "data" / "tracker.json")
+METADATA_FILE = str(BASE_DIR / "data" / "metadata.json")
 
 _lock = threading.Lock()
 
@@ -43,6 +44,42 @@ def _write_tracker(data: dict):
     _ensure_dirs()
     with open(TRACKER_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _read_metadata() -> dict:
+    _ensure_dirs()
+    if not os.path.exists(METADATA_FILE):
+        return {"last_scan_time": None, "groq_api_usage": 0}
+    try:
+        with open(METADATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"last_scan_time": None, "groq_api_usage": 0}
+
+
+def _write_metadata(data: dict):
+    _ensure_dirs()
+    with open(METADATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def save_last_scan_time():
+    with _lock:
+        data = _read_metadata()
+        data["last_scan_time"] = datetime.now(timezone.utc).isoformat()
+        _write_metadata(data)
+
+
+def increment_api_usage():
+    with _lock:
+        data = _read_metadata()
+        data["groq_api_usage"] = data.get("groq_api_usage", 0) + 1
+        _write_metadata(data)
+
+
+def get_metadata() -> dict:
+    with _lock:
+        return _read_metadata()
 
 
 def log_application(job_id: str, job_title: str, company: str, status: str, reason: str = None):
@@ -113,6 +150,7 @@ def save_summary(summary: dict):
 def get_dashboard_stats() -> dict:
     with _lock:
         data = _read_tracker()
+        meta = _read_metadata()
     apps = data.get("applications", [])
 
     counts = {
@@ -134,4 +172,6 @@ def get_dashboard_stats() -> dict:
         "ready": counts[JobStatus.READY],
         "submitted": counts[JobStatus.SUBMITTED],
         "failed": counts[JobStatus.FAILED],
+        "last_scan_time": meta.get("last_scan_time"),
+        "groq_api_usage": meta.get("groq_api_usage", 0)
     }

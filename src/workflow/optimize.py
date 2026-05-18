@@ -57,6 +57,12 @@ def call_groq_with_retry(messages, model="llama-3.3-70b-versatile", temperature=
                 model=model,
                 temperature=temperature,
             )
+            # Log successful API call
+            try:
+                from src.storage.tracker import increment_api_usage
+                increment_api_usage()
+            except:
+                pass
             return response.choices[0].message.content.strip()
         except Exception as e:
             if attempt == max_retries - 1:
